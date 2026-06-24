@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}
+  {% if eprint is defined %}{{ eprint.title[:50] }} — Viewer{% else %}PDF Viewer{% endif %}
+{% endblock %}
+
+{% block body_class %}viewer-body{% endblock %}
+
+{% block body %}
+
+{# ── Top Bar ── #}
+<div class="viewer-topbar">
+  <a href="{% if eprint is defined %}{{ url_for('main.detail', eprint_id=eprint.eprint_id) }}{% else %}{{ url_for('main.index') }}{% endif %}"
+     class="viewer-back">
+    ← Kembali
+  </a>
+  <div class="viewer-title-wrap">
+    {% if eprint is defined %}
+    <span class="viewer-doc-title">{{ eprint.title[:70] }}{% if eprint.title|length > 70 %}…{% endif %}</span>
+    {% if doc is defined %}
+    <span class="viewer-doc-type">{{ doc.label }}</span>
+    {% endif %}
+    {% endif %}
+  </div>
+  <div class="viewer-page-info" id="pageInfo">
+    <span id="pageInfoText">—</span>
+  </div>
+</div>
+
+{# ── Error: gagal load ── #}
+{% if load_error is defined and load_error %}
+<div class="viewer-center-state">
+  <div class="state-icon">⚠️</div>
+  <h3>Dokumen tidak dapat dimuat</h3>
+  <p>Terjadi kesalahan saat memuat dokumen. Coba lagi nanti.</p>
+</div>
+
+{# ── Error: restricted ── #}
+{% elif restricted %}
+<div class="viewer-center-state">
+  <div class="state-icon">🔒</div>
+  <h3>File Belum Tersedia untuk Umum</h3>
+  <p>Maaf, file ini belum terbuka untuk umum dan hanya dapat diakses oleh staf repositori.</p>
+  <a href="{{ url_for('main.detail', eprint_id=eprint.eprint_id) }}" class="btn-back-white">← Kembali ke detail</a>
+</div>
+
+{# ── Viewer Normal ── #}
+{% else %}
+<div class="viewer-canvas" id="viewerCanvas">
+  <div class="viewer-loading" id="loadingSpinner">
+    <div class="spinner"></div>
+    <p>Memuat dokumen…</p>
+  </div>
+  <div class="viewer-error-msg" id="viewerErrorMsg" style="display:none;">
+    <span>⚠️ Gagal memuat halaman ini.</span>
+    <button onclick="retryCurrentPage()">Coba lagi</button>
+  </div>
+  <img
+    id="pdfPageImg"
+    class="pdf-page-img"
+    alt="Halaman PDF"
+    draggable="false"
+    style="display:none;"
+  />
+</div>
+
+{# ── Navigation Bar ── #}
+<nav class="viewer-navbar">
+  <button class="nav-btn" id="btnFirst" onclick="goToPage(1)" title="Halaman pertama">⏮</button>
+  <button class="nav-btn" id="btnPrev" onclick="goToPage(currentPage - 1)" title="Sebelumnya">◀</button>
+
+  <div class="nav-page-input">
+    <input
+      type="number"
+      id="pageInput"
+      min="1"
+      value="1"
+      aria-label="Nomor halaman"
+    />
+    <span class="nav-page-sep">/ <span id="totalPageDisplay">—</span></span>
+  </div>
+
+  <button class="nav-btn" id="btnNext" onclick="goToPage(currentPage + 1)" title="Selanjutnya">▶</button>
+  <button class="nav-btn" id="btnLast" onclick="goToPage(totalPages)" title="Halaman terakhir">⏭</button>
+</nav>
+{% endif %}
+
+{# ── Watermark Notice ── #}
+{% if not restricted and load_error is not defined %}
+<div class="watermark-notice">
+  Konten dilindungi · Milik Universitas Hasanuddin · Hanya untuk keperluan akademik
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if not restricted and load_error is not defined %}
+<script>
+  // Data injected server-side — URL file asli TIDAK dimasukkan ke sini
+  const EPRINT_ID = {{ eprint.eprint_id | tojson }};
+  const DOC_TYPE  = {{ doc.doc_type | tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/viewer.js') }}"></script>
+{% endif %}
+{% endblock %}

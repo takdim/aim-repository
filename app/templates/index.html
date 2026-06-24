@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block title %}
+  {% if query %}Hasil: {{ query }} — Unhas Repository{% else %}Unhas Repository Viewer{% endif %}
+{% endblock %}
+
+{% block body %}
+
+{# ── HEADER (hanya muncul saat ada hasil) ── #}
+{% if results is defined %}
+<header class="site-header">
+  <div class="header-inner">
+    <a href="{{ url_for('main.index') }}" class="site-logo">
+      <span class="logo-icon">🏛</span>
+      <span class="logo-text">Unhas<strong>Repo</strong></span>
+    </a>
+    <form class="header-search-form" action="{{ url_for('main.search') }}" method="get">
+      <div class="search-input-wrap compact">
+        <input
+          type="text"
+          name="q"
+          class="search-input"
+          value="{{ query|e }}"
+          placeholder="Cari judul, penulis, topik…"
+          autocomplete="off"
+          required
+        />
+        <button type="submit" class="search-btn" aria-label="Cari">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </button>
+      </div>
+    </form>
+  </div>
+</header>
+{% endif %}
+
+{# ── HERO SEARCH (hanya muncul saat belum ada hasil) ── #}
+{% if results is not defined %}
+<main class="hero-section">
+  <div class="hero-inner">
+    <div class="hero-brand">
+      <span class="hero-icon">🏛</span>
+      <h1 class="hero-title">Unhas<strong>Repo</strong></h1>
+      <p class="hero-subtitle">Penelusuran Repositori Universitas Hasanuddin</p>
+    </div>
+
+    <form class="hero-form" action="{{ url_for('main.search') }}" method="get" id="searchForm">
+      <div class="search-input-wrap hero">
+        <input
+          type="text"
+          name="q"
+          id="searchInput"
+          class="search-input"
+          placeholder="Cari judul, penulis, kata kunci…"
+          autocomplete="off"
+          autofocus
+          required
+        />
+        <button type="submit" class="search-btn" aria-label="Cari">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </button>
+      </div>
+      {% if error %}
+      <p class="search-error">{{ error }}</p>
+      {% endif %}
+    </form>
+
+    <p class="hero-hint">Contoh: <a href="{{ url_for('main.search', q='beton') }}">beton</a>, <a href="{{ url_for('main.search', q='hukum') }}">hukum</a>, <a href="{{ url_for('main.search', q='ekonomi') }}">ekonomi</a></p>
+  </div>
+</main>
+
+{# ── RESULTS ── #}
+{% else %}
+<main class="results-main">
+  <div class="results-container">
+
+    {% if error %}
+    <div class="alert alert-error">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {% if results %}
+    <div class="results-meta">
+      <span>
+        Menampilkan
+        <strong>{{ ((pagination.current - 1) * pagination.per_page) + 1 }}</strong>–<strong>{{ [pagination.current * pagination.per_page, pagination.total_results] | min }}</strong>
+        dari <strong>{{ pagination.total_results }}</strong> hasil untuk
+        "<em>{{ query|e }}</em>"
+      </span>
+    </div>
+
+    <ol class="results-list" start="{{ ((pagination.current - 1) * pagination.per_page) + 1 }}">
+      {% for item in results %}
+      <li class="result-item">
+        <a href="{{ url_for('main.detail', eprint_id=item.eprint_id, back=request.url) }}" class="result-link">
+          <h2 class="result-title">{{ item.title }}</h2>
+        </a>
+        <div class="result-meta">
+          {% if item.author %}<span class="meta-author">{{ item.author }}</span>{% endif %}
+          {% if item.year %}<span class="meta-year">{{ item.year }}</span>{% endif %}
+          {% if item.item_type %}<span class="meta-type">{{ item.item_type }}</span>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+
+    {# ── PAGINATION ── #}
+    {% if pagination.total_pages > 1 %}
+    <nav class="pagination" aria-label="Navigasi halaman">
+      {% if pagination.current > 1 %}
+      <a href="{{ url_for('main.search', q=query, page=pagination.current - 1) }}" class="page-btn">← Sebelumnya</a>
+      {% else %}
+      <span class="page-btn disabled">← Sebelumnya</span>
+      {% endif %}
+
+      <div class="page-numbers">
+        {% for p in pagination_pages %}
+          {% if p == '...' %}
+          <span class="page-ellipsis">…</span>
+          {% elif p == pagination.current %}
+          <span class="page-btn active">{{ p }}</span>
+          {% else %}
+          <a href="{{ url_for('main.search', q=query, page=p) }}" class="page-btn">{{ p }}</a>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      {% if pagination.current < pagination.total_pages %}
+      <a href="{{ url_for('main.search', q=query, page=pagination.current + 1) }}" class="page-btn">Selanjutnya →</a>
+      {% else %}
+      <span class="page-btn disabled">Selanjutnya →</span>
+      {% endif %}
+    </nav>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">🔍</div>
+      <h3>Tidak ada hasil ditemukan</h3>
+      <p>Tidak ada dokumen untuk "<em>{{ query|e }}</em>". Coba kata kunci lain.</p>
+      <a href="{{ url_for('main.index') }}" class="btn-back">← Cari ulang</a>
+    </div>
+    {% endif %}
+
+  </div>
+</main>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/search.js') }}"></script>
+{% endblock %}

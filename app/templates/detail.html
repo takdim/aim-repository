@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}
+  {% if eprint is defined %}{{ eprint.title[:60] }} — Unhas Repo{% else %}Detail Dokumen{% endif %}
+{% endblock %}
+
+{% block body %}
+<header class="site-header">
+  <div class="header-inner">
+    <a href="{{ url_for('main.index') }}" class="site-logo">
+      <span class="logo-icon">🏛</span>
+      <span class="logo-text">Unhas<strong>Repo</strong></span>
+    </a>
+  </div>
+</header>
+
+<main class="detail-main">
+  <div class="detail-container">
+
+    {# ── Error State ── #}
+    {% if error is defined %}
+    <div class="alert alert-error">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      {{ error }}
+    </div>
+    <a href="javascript:history.back()" class="btn-back">← Kembali</a>
+
+    {# ── Normal Detail ── #}
+    {% elif eprint is defined %}
+    <a href="{{ back_url }}" class="btn-back">← Kembali ke hasil pencarian</a>
+
+    <article class="eprint-card">
+      <h1 class="eprint-title">{{ eprint.title }}</h1>
+
+      <div class="eprint-meta">
+        {% if eprint.author %}<div class="meta-row"><span class="meta-label">Penulis</span><span>{{ eprint.author }}</span></div>{% endif %}
+        {% if eprint.year %}<div class="meta-row"><span class="meta-label">Tahun</span><span>{{ eprint.year }}</span></div>{% endif %}
+      </div>
+
+      {% if eprint.abstract %}
+      <div class="eprint-abstract">
+        <h3>Abstrak</h3>
+        <p>{{ eprint.abstract }}{% if eprint.abstract|length >= 600 %}…{% endif %}</p>
+      </div>
+      {% endif %}
+    </article>
+
+    {# ── Dokumen Tersedia ── #}
+    {% if eprint.documents %}
+    <section class="docs-section">
+      <h2 class="docs-heading">Dokumen Tersedia</h2>
+      <div class="docs-grid">
+        {% for doc in eprint.documents %}
+        <div class="doc-card {% if doc.is_restricted %}doc-restricted{% endif %}"
+             {% if doc.is_restricted %}
+             onclick="showRestrictedModal()"
+             role="button" tabindex="0"
+             onkeydown="if(event.key==='Enter') showRestrictedModal()"
+             {% else %}
+             onclick="window.location.href='{{ url_for('main.view_pdf', eprint_id=eprint.eprint_id, doc_type=doc.doc_type) }}'"
+             role="button" tabindex="0"
+             onkeydown="if(event.key==='Enter') window.location.href='{{ url_for('main.view_pdf', eprint_id=eprint.eprint_id, doc_type=doc.doc_type) }}'"
+             {% endif %}
+        >
+          <div class="doc-icon">
+            {% if doc.is_restricted %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            {% else %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            {% endif %}
+          </div>
+          <div class="doc-info">
+            <span class="doc-label">{{ doc.label }}</span>
+            {% if doc.is_restricted %}
+            <span class="doc-status restricted">🔒 Terbatas</span>
+            {% else %}
+            <span class="doc-status available">✓ Tersedia</span>
+            {% endif %}
+          </div>
+          <div class="doc-arrow">
+            {% if not doc.is_restricted %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">📄</div>
+      <h3>Dokumen belum tersedia</h3>
+      <p>Tidak ada file dokumen yang dapat ditampilkan untuk judul ini.</p>
+    </div>
+    {% endif %}
+
+    {% endif %}
+  </div>
+</main>
+
+{# ── Modal Restricted ── #}
+<div id="restrictedModal" class="modal-overlay" onclick="closeModal(event)" aria-hidden="true" role="dialog">
+  <div class="modal-box">
+    <div class="modal-icon">🔒</div>
+    <h3 class="modal-title">File Belum Tersedia</h3>
+    <p class="modal-message">Maaf, file ini belum terbuka untuk umum dan hanya dapat diakses oleh staf repositori.</p>
+    <button class="modal-close-btn" onclick="document.getElementById('restrictedModal').classList.remove('active')" autofocus>
+      Tutup
+    </button>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showRestrictedModal() {
+  const modal = document.getElementById('restrictedModal');
+  modal.classList.add('active');
+  modal.setAttribute('aria-hidden', 'false');
+  modal.querySelector('.modal-close-btn').focus();
+}
+
+function closeModal(e) {
+  if (e.target.id === 'restrictedModal') {
+    document.getElementById('restrictedModal').classList.remove('active');
+  }
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    document.getElementById('restrictedModal').classList.remove('active');
+  }
+});
+</script>
+{% endblock %}
