@@ -4,6 +4,16 @@
   {% if eprint is defined %}{{ eprint.title[:60] }} — Unhas Repo{% else %}Detail Dokumen{% endif %}
 {% endblock %}
 
+{% block extra_head %}
+  {% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}" />{% endif %}
+  {% if meta_robots %}<meta name="robots" content="{{ meta_robots }}" />{% endif %}
+  {% if citation_title %}<meta name="citation_title" content="{{ citation_title }}" />{% endif %}
+  {% if citation_author %}<meta name="citation_author" content="{{ citation_author }}" />{% endif %}
+  {% if citation_publication_date %}<meta name="citation_publication_date" content="{{ citation_publication_date }}" />{% endif %}
+  {% if citation_pdf_url %}<meta name="citation_pdf_url" content="{{ citation_pdf_url }}" />{% endif %}
+  {% if citation_abstract_url %}<meta name="citation_abstract_html_url" content="{{ citation_abstract_url }}" />{% endif %}
+{% endblock %}
+
 {% block body %}
 <header class="site-header">
   <div class="header-inner">
@@ -35,6 +45,9 @@
       <div class="eprint-meta">
         {% if eprint.author %}<div class="meta-row"><span class="meta-label">Penulis</span><span>{{ eprint.author }}</span></div>{% endif %}
         {% if eprint.year %}<div class="meta-row"><span class="meta-label">Tahun</span><span>{{ eprint.year }}</span></div>{% endif %}
+        {% if detail_uri %}
+        <div class="meta-row"><span class="meta-label">Permalink</span><span><a href="{{ detail_uri }}" target="_blank" rel="noopener">{{ detail_uri }}</a></span></div>
+        {% endif %}
       </div>
 
       {% if eprint.abstract %}

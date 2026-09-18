@@ -1,5 +1,6 @@
 import re
 import os
+from html import escape
 from datetime import date
 
 from flask import (
@@ -14,6 +15,7 @@ from flask import (
 )
 
 from .services.pdf_renderer import pdf_renderer
+from .services.cache import metadata_cache
 from .services.repository_client import repository_client
 from .services.rta_client import rta_client
 
@@ -22,6 +24,7 @@ main = Blueprint("main", __name__)
 ITEMS_PER_PAGE = 20
 MIN_YEAR = 1976
 COMBINED_FETCH_LIMIT = int(os.environ.get("COMBINED_FETCH_LIMIT", "120"))
+SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "http://127.0.0.1:5001").rstrip("/")
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -55,6 +58,30 @@ def _short_abstract(text: str, max_len: int = 380) -> str:
     if len(clean) <= max_len:
         return clean
     return clean[: max_len - 1].rstrip() + "…"
+
+
+def _absolute_url(path_or_url: str) -> str:
+    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+        return path_or_url
+    if not path_or_url.startswith("/"):
+        path_or_url = "/" + path_or_url
+    return SITE_BASE_URL + path_or_url
+
+
+def _publication_date(year_text: str) -> str:
+    year = (year_text or "").strip()
+    return f"{year}/01/01" if re.fullmatch(r"\d{4}", year) else ""
+
+
+def _find_open_doc_for_pdf(eprint) -> object | None:
+    preferred = next((d for d in eprint.documents if d.doc_type == "full_text" and not d.is_restricted), None)
+    if preferred is not None:
+        return preferred
+    return next((d for d in eprint.documents if not d.is_restricted), None)
+
+
+def _bool_robots_value() -> str:
+    return "index,follow" if os.environ.get("ALLOW_ROBOTS_INDEX", "0") == "1" else "noindex,nofollow"
 
 
 def _collect_repository_items(q: str, year_filter: int | None, limit: int) -> list[dict]:
@@ -244,7 +271,30 @@ def detail(eprint_id: str):
             back_url=back_url,
         ), 500
 
-    return render_template("detail.html", eprint=eprint, back_url=back_url)
+    open_doc = _find_open_doc_for_pdf(eprint)
+    citation_pdf_url = ""
+    if open_doc is not None:
+        citation_pdf_url = _absolute_url(
+            url_for("main.api_pdf_inline", eprint_id=eprint.eprint_id, doc_type=open_doc.doc_type)
+        )
+
+    citation_page_url = _absolute_url(url_for("main.detail", eprint_id=eprint.eprint_id))
+    source_uri = f"https://repository.unhas.ac.id/id/eprint/{eprint.eprint_id}"
+
+    return render_template(
+        "detail.html",
+        eprint=eprint,
+        back_url=back_url,
+        canonical_url=citation_page_url,
+        meta_robots=_bool_robots_value(),
+        citation_title=eprint.title,
+        citation_author=eprint.author,
+        citation_publication_date=_publication_date(eprint.year),
+        citation_pdf_url=citation_pdf_url,
+        citation_abstract_url=citation_page_url,
+        detail_uri=citation_page_url,
+        source_uri=source_uri,
+    )
 
 
 @main.route("/detail-rta/<source_id>")
@@ -266,7 +316,20 @@ def detail_rta(source_id: str):
             back_url=back_url,
         ), 500
 
-    return render_template("rta_detail.html", item=detail_data, back_url=back_url)
+    citation_page_url = _absolute_url(url_for("main.detail_rta", source_id=source_id))
+    return render_template(
+        "rta_detail.html",
+        item=detail_data,
+        back_url=back_url,
+        canonical_url=citation_page_url,
+        meta_robots=_bool_robots_value(),
+        citation_title=detail_data.get("title", ""),
+        citation_author=detail_data.get("author", ""),
+        citation_publication_date=_publication_date(str(detail_data.get("year", ""))),
+        citation_abstract_url=citation_page_url,
+        detail_uri=citation_page_url,
+        source_uri=detail_data.get("source_url", ""),
+    )
 
 
 @main.route("/view/<eprint_id>/<doc_type>")
@@ -385,3 +448,75 @@ def rta_login_check():
     result = rta_client.login_check()
     status_code = 200 if result.get("ok") else 400
     return jsonify(result), status_code
+
+
+@main.route("/robots.txt")
+def robots_txt():
+    if os.environ.get("ALLOW_ROBOTS_INDEX", "0") == "1":
+        content = (
+            "User-agent: *\n"
+            "Allow: /\n"
+            "Disallow: /api/rta/\n"
+            "Disallow: /search\n"
+            f"Sitemap: {_absolute_url('/sitemap.xml')}\n"
+        )
+    else:
+        content = "User-agent: *\nDisallow: /\n"
+
+    return Response(content, mimetype="text/plain; charset=utf-8")
+
+
+@main.route("/sitemap.xml")
+def sitemap_xml():
+    cache_key = "seo:sitemap:xml"
+    cached = metadata_cache.get(cache_key)
+    if cached:
+        return Response(cached, mimetype="application/xml; charset=utf-8")
+
+    urls: list[str] = [_absolute_url(url_for("main.index"))]
+
+    enable_sitemap = os.environ.get("ENABLE_SITEMAP", "0") == "1"
+    sitemap_limit = int(os.environ.get("SITEMAP_LIMIT", "200"))
+
+    if enable_sitemap:
+        current_year = date.today().year
+        collected = 0
+        page = 1
+        total_pages = 1
+        while collected < sitemap_limit and page <= total_pages:
+            results, pagination = repository_client.browse_by_year(current_year, page, "")
+            total_pages = pagination.get("total_pages", 1)
+            for item in results:
+                urls.append(_absolute_url(url_for("main.detail", eprint_id=item.eprint_id)))
+                collected += 1
+                if collected >= sitemap_limit:
+                    break
+            if not results:
+                break
+            page += 1
+
+        rta_items = rta_client.search_approved("", current_year, min(120, sitemap_limit))
+        for item in rta_items:
+            source_id = str(item.get("source_id", "")).strip()
+            if source_id.isdigit():
+                urls.append(_absolute_url(url_for("main.detail_rta", source_id=source_id)))
+
+    seen = set()
+    unique_urls = []
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        unique_urls.append(url)
+
+    xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>']
+    xml_parts.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+    for url in unique_urls:
+        xml_parts.append("  <url>")
+        xml_parts.append(f"    <loc>{escape(url)}</loc>")
+        xml_parts.append("  </url>")
+    xml_parts.append("</urlset>")
+
+    xml = "\n".join(xml_parts)
+    metadata_cache.set(cache_key, xml, ttl=900)
+    return Response(xml, mimetype="application/xml; charset=utf-8")
