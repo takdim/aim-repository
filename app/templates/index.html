@@ -111,21 +111,36 @@
     <ol class="results-list" start="{{ ((pagination.current - 1) * pagination.per_page) + 1 }}">
       {% for item in results %}
       <li class="result-item">
+        {% if item.source == 'repository' and item.eprint_id %}
         <a href="{{ url_for('main.detail', eprint_id=item.eprint_id, back=request.url) }}" class="result-link">
           <h2 class="result-title">{{ item.title }}</h2>
         </a>
+        {% elif item.source == 'rta' and item.source_id %}
+        <a href="{{ url_for('main.detail_rta', source_id=item.source_id, back=request.url) }}" class="result-link">
+          <h2 class="result-title">{{ item.title }}</h2>
+        </a>
+        {% else %}
+        <h2 class="result-title">{{ item.title }}</h2>
+        {% endif %}
         <div class="result-meta">
           {% if item.author %}<span class="meta-author">{{ item.author }}</span>{% endif %}
           {% if item.year %}<span class="meta-year">{{ item.year }}</span>{% endif %}
           {% if item.item_type %}<span class="meta-type">{{ item.item_type }}</span>{% endif %}
-          {% if item.pdf_status == 'available' %}
-          <span class="meta-pdf pdf-available">PDF tersedia</span>
-          {% elif item.pdf_status == 'restricted' %}
-          <span class="meta-pdf pdf-restricted">PDF terbatas</span>
-          {% elif item.pdf_status == 'unavailable' %}
-          <span class="meta-pdf pdf-unavailable">PDF tidak tersedia</span>
+          {% if item.source == 'repository' %}
+            {% if item.pdf_status == 'available' %}
+            <span class="meta-pdf pdf-available">PDF tersedia</span>
+            {% elif item.pdf_status == 'restricted' %}
+            <span class="meta-pdf pdf-restricted">PDF terbatas</span>
+            {% elif item.pdf_status == 'unavailable' %}
+            <span class="meta-pdf pdf-unavailable">PDF tidak tersedia</span>
+            {% else %}
+            <span class="meta-pdf pdf-unknown">Status PDF tidak diketahui</span>
+            {% endif %}
+          {% elif item.source == 'rta' %}
+          <span class="meta-pdf pdf-available">Sumber: RTA (Disetujui)</span>
+          <span class="meta-pdf pdf-unknown">PDF RTA belum diaktifkan</span>
           {% else %}
-          <span class="meta-pdf pdf-unknown">Status PDF tidak diketahui</span>
+          <span class="meta-pdf pdf-unknown">Sumber: Lainnya</span>
           {% endif %}
         </div>
       </li>

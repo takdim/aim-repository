@@ -247,6 +247,18 @@ a:hover { text-decoration: underline; }
 }
 .result-item:hover .result-title { color: var(--blue-mid); }
 
+.result-abstract {
+  margin: 0 0 .6rem;
+  color: var(--gray-700);
+  line-height: 1.55;
+  font-size: .92rem;
+}
+
+.result-abstract-empty {
+  font-style: italic;
+  color: var(--gray-500);
+}
+
 .result-meta {
   display: flex;
   flex-wrap: wrap;

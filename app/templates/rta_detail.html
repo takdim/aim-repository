@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}
+  {% if item is defined %}{{ item.title[:60] }} — Detail RTA{% else %}Detail RTA{% endif %}
+{% endblock %}
+
+{% block body %}
+<header class="site-header">
+  <div class="header-inner">
+    <a href="{{ url_for('main.index') }}" class="site-logo">
+      <span class="logo-icon">🏛</span>
+      <span class="logo-text">Unhas<strong>Repo</strong></span>
+    </a>
+  </div>
+</header>
+
+<main class="detail-main">
+  <div class="detail-container">
+    {% if error is defined %}
+    <div class="alert alert-error">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      {{ error }}
+    </div>
+    <a href="{{ back_url }}" class="btn-back">← Kembali ke hasil pencarian</a>
+    {% else %}
+    <a href="{{ back_url }}" class="btn-back">← Kembali ke hasil pencarian</a>
+
+    <article class="eprint-card">
+      <h1 class="eprint-title">{{ item.title }}</h1>
+
+      <div class="eprint-meta">
+        <div class="meta-row"><span class="meta-label">Sumber</span><span>RTA (Disetujui)</span></div>
+      </div>
+
+      {% if item.abstract %}
+      <div class="eprint-abstract">
+        <h3>Abstrak</h3>
+        <p>{{ item.abstract }}</p>
+      </div>
+      {% else %}
+      <div class="eprint-abstract">
+        <h3>Abstrak</h3>
+        <p>Abstrak belum tersedia.</p>
+      </div>
+      {% endif %}
+    </article>
+    {% endif %}
+  </div>
+</main>
+{% endblock %}

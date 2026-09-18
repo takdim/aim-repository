@@ -1,4 +1,5 @@
 import re
+import os
 import requests
 from bs4 import BeautifulSoup
 from dataclasses import dataclass, field
@@ -6,8 +7,9 @@ from typing import Optional
 
 from .cache import metadata_cache
 
-BASE_URL = "https://repository.unhas.ac.id"
-RESULTS_PER_PAGE = 20
+BASE_URL = os.environ.get("REPOSITORY_BASE_URL", "https://repository.unhas.ac.id")
+RESULTS_PER_PAGE = int(os.environ.get("SEARCH_PER_PAGE", "20"))
+REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "20"))
 
 HEADERS = {
     "User-Agent": (
@@ -76,7 +78,7 @@ class RepositoryClient:
             f"{BASE_URL}/cgi/search/simple",
             params=params,
             headers=HEADERS,
-            timeout=20,
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
 
@@ -136,7 +138,7 @@ class RepositoryClient:
         resp = requests.get(
             f"{BASE_URL}/view/year/{year}.html",
             headers=HEADERS,
-            timeout=25,
+            timeout=max(REQUEST_TIMEOUT, 25),
         )
         resp.raise_for_status()
 
@@ -286,7 +288,7 @@ class RepositoryClient:
         resp = requests.get(
             f"{BASE_URL}/id/eprint/{eprint_id}/",
             headers=HEADERS,
-            timeout=20,
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
 

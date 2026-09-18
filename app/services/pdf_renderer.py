@@ -68,6 +68,57 @@ class PDFRenderer:
         doc.close()
         return count
 
+    def get_watermarked_pdf(self, eprint_id: str, doc_type: str, file_url: str) -> bytes:
+        """
+        Return PDF bytes ber-watermark untuk ditampilkan inline di browser.
+        Hanya dipakai untuk dokumen open-access.
+        """
+        src_cache_key = f"pdf:{eprint_id}:{doc_type}"
+        wm_cache_key = f"pdfwm:{eprint_id}:{doc_type}"
+
+        cached_wm = pdf_bytes_cache.get(wm_cache_key)
+        if cached_wm:
+            return cached_wm
+
+        src_pdf = self._fetch_pdf(src_cache_key, file_url)
+        lock = _get_fetch_lock(wm_cache_key)
+        with lock:
+            cached_wm = pdf_bytes_cache.get(wm_cache_key)
+            if cached_wm:
+                return cached_wm
+
+            doc = fitz.open(stream=src_pdf, filetype="pdf")
+            try:
+                for page in doc:
+                    rect = page.rect
+                    size = max(20, int(min(rect.width, rect.height) * 0.045))
+                    wm_rect = fitz.Rect(
+                        rect.x0 + rect.width * 0.08,
+                        rect.y0 + rect.height * 0.46,
+                        rect.x1 - rect.width * 0.08,
+                        rect.y0 + rect.height * 0.58,
+                    )
+                    page.insert_textbox(
+                        wm_rect,
+                        WATERMARK_TEXT,
+                        fontsize=size,
+                        fontname="helv",
+                        color=(0.35, 0.35, 0.35),
+                        align=1,
+                        overlay=True,
+                        fill_opacity=0.22,
+                        stroke_opacity=0.22,
+                    )
+
+                out = io.BytesIO()
+                doc.save(out, deflate=True, garbage=3)
+                wm_bytes = out.getvalue()
+            finally:
+                doc.close()
+
+            pdf_bytes_cache.set(wm_cache_key, wm_bytes, ttl=300)
+            return wm_bytes
+
     # ─── Page Rendering ───────────────────────────────────────────────────────
 
     def render_page(
