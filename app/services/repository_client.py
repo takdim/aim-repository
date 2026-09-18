@@ -33,6 +33,7 @@ class SearchResultItem:
     author: str = ""
     year: str = ""
     item_type: str = ""
+    pdf_status: str = "unknown"  # available | restricted | unavailable | unknown
 
 
 @dataclass
@@ -87,6 +88,112 @@ class RepositoryClient:
         metadata_cache.set(cache_key, result, ttl=600)
         return result
 
+    def browse_by_year(self, year: int, page: int = 1, query: str = "") -> tuple[list, dict]:
+        """
+        Browse dokumen berdasarkan tahun dari endpoint /view/year/{year}.html.
+        Jika query diisi, hasil difilter pada judul/penulis.
+        """
+        normalized_query = query.strip().lower()
+        cache_key = f"browse_year:{year}:{normalized_query}:{page}"
+        cached = metadata_cache.get(cache_key)
+        if cached:
+            return cached
+
+        all_items = self._get_year_items(year)
+
+        if normalized_query:
+            filtered = [
+                item for item in all_items
+                if normalized_query in item.title.lower() or normalized_query in item.author.lower()
+            ]
+        else:
+            filtered = all_items
+
+        total = len(filtered)
+        total_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
+        safe_page = min(max(1, page), total_pages)
+        start = (safe_page - 1) * RESULTS_PER_PAGE
+        end = start + RESULTS_PER_PAGE
+        paged_items = filtered[start:end]
+
+        pagination = {
+            "current": safe_page,
+            "total_pages": total_pages,
+            "total_results": total,
+            "per_page": RESULTS_PER_PAGE,
+        }
+
+        result = (paged_items, pagination)
+        metadata_cache.set(cache_key, result, ttl=600)
+        return result
+
+    def _get_year_items(self, year: int) -> list[SearchResultItem]:
+        cache_key = f"year_items:{year}"
+        cached = metadata_cache.get(cache_key)
+        if cached:
+            return cached
+
+        resp = requests.get(
+            f"{BASE_URL}/view/year/{year}.html",
+            headers=HEADERS,
+            timeout=25,
+        )
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        items = self._parse_year_browse_results(soup, year)
+        metadata_cache.set(cache_key, items, ttl=600)
+        return items
+
+    def _parse_year_browse_results(self, soup: BeautifulSoup, year: int) -> list[SearchResultItem]:
+        items: list[SearchResultItem] = []
+        seen_ids: set[str] = set()
+
+        for a in soup.find_all("a", href=re.compile(r"/id/eprint/\d+/?")):
+            href = str(a.get("href", ""))
+            m = re.search(r"/id/eprint/(\d+)", href)
+            if not m:
+                continue
+            eprint_id = m.group(1)
+            if eprint_id in seen_ids:
+                continue
+
+            title = a.get_text(" ", strip=True)
+            if not title or len(title) < 5:
+                continue
+
+            row = a.find_parent("li") or a.find_parent("p") or a.find_parent("div")
+            if row is None:
+                continue
+            text = row.get_text(" ", strip=True)
+
+            if not re.search(rf"\({year}\)", text):
+                continue
+
+            author = ""
+            item_type = ""
+
+            author_m = re.match(rf"^(.*?)\s*\({year}\)", text)
+            if author_m:
+                author = author_m.group(1).strip()[:150]
+
+            type_m = re.search(r"(Skripsi|Thesis|Tesis|Disertasi|D4)\s+thesis", text, re.I)
+            if type_m:
+                item_type = type_m.group(1).title()
+
+            seen_ids.add(eprint_id)
+            items.append(
+                SearchResultItem(
+                    eprint_id=eprint_id,
+                    title=title,
+                    author=author,
+                    year=str(year),
+                    item_type=item_type,
+                )
+            )
+
+        return items
+
     def _parse_search_results(self, soup: BeautifulSoup) -> list:
         items: list[SearchResultItem] = []
         seen_ids: set[str] = set()
@@ -139,10 +246,21 @@ class RepositoryClient:
 
     def _parse_pagination(self, soup: BeautifulSoup, current_page: int) -> dict:
         total = 0
-        for string in soup.stripped_strings:
-            m = re.search(r"Displaying results \d+ to \d+ of (\d+)", string)
+
+        # Beberapa halaman EPrints memecah kalimat kontrol hasil ke banyak <span>,
+        # jadi parsing harus dilakukan pada teks gabungan, bukan string per node.
+        text_blob = " ".join(soup.stripped_strings)
+
+        patterns = [
+            r"Displaying\s+results\s+\d+\s+to\s+\d+\s+of\s+([\d,\.]+)",
+            r"Results\s+\d+\s+to\s+\d+\s+of\s+([\d,\.]+)",
+            r"Menampilkan\s+\d+\s*[\-–]\s*\d+\s+dari\s+([\d,\.]+)",
+        ]
+
+        for pattern in patterns:
+            m = re.search(pattern, text_blob, re.I)
             if m:
-                total = int(m.group(1))
+                total = int(re.sub(r"[^\d]", "", m.group(1)))
                 break
 
         total_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
@@ -177,6 +295,31 @@ class RepositoryClient:
 
         metadata_cache.set(cache_key, detail, ttl=600)
         return detail
+
+    def get_pdf_status(self, eprint_id: str) -> str:
+        """
+        Ringkas status ketersediaan PDF dari detail dokumen.
+        Return: available | restricted | unavailable | unknown
+        """
+        cache_key = f"pdf_status:{eprint_id}"
+        cached = metadata_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            detail = self.get_detail(eprint_id)
+        except Exception:
+            return "unknown"
+
+        if not detail.documents:
+            status = "unavailable"
+        elif any(not doc.is_restricted for doc in detail.documents):
+            status = "available"
+        else:
+            status = "restricted"
+
+        metadata_cache.set(cache_key, status, ttl=600)
+        return status
 
     def _parse_detail(self, soup: BeautifulSoup, eprint_id: str) -> EprintDetail:
         # Title

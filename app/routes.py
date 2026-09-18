@@ -1,4 +1,5 @@
 import re
+from datetime import date
 
 from flask import (
     Blueprint,
@@ -17,6 +18,7 @@ from .services.repository_client import repository_client
 main = Blueprint("main", __name__)
 
 ITEMS_PER_PAGE = 20
+MIN_YEAR = 1976
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -38,14 +40,33 @@ def make_pagination_pages(current: int, total: int) -> list:
 
 @main.route("/")
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        selected_year="",
+        year_options=list(range(date.today().year, MIN_YEAR - 1, -1)),
+    )
 
 
 @main.route("/search")
 def search():
     q = request.args.get("q", "").strip()
-    if not q:
-        return render_template("index.html", error="Masukkan kata kunci pencarian terlebih dahulu.")
+    year_raw = request.args.get("year", "").strip()
+
+    selected_year = ""
+    year_filter = None
+    if year_raw and re.fullmatch(r"\d{4}", year_raw):
+        year_candidate = int(year_raw)
+        if MIN_YEAR <= year_candidate <= date.today().year:
+            year_filter = year_candidate
+            selected_year = year_raw
+
+    if not q and year_filter is None:
+        return render_template(
+            "index.html",
+            error="Masukkan kata kunci atau pilih tahun terlebih dahulu.",
+            selected_year=selected_year,
+            year_options=list(range(date.today().year, MIN_YEAR - 1, -1)),
+        )
 
     try:
         page = max(1, int(request.args.get("page", 1)))
@@ -53,19 +74,29 @@ def search():
         page = 1
 
     try:
-        results, pagination = repository_client.search(q, page)
+        if year_filter is not None:
+            results, pagination = repository_client.browse_by_year(year_filter, page, q)
+        else:
+            results, pagination = repository_client.search(q, page)
     except Exception as exc:
         return render_template(
             "index.html",
             query=q,
             error="Gagal mengambil hasil pencarian. Periksa koneksi internet dan coba lagi.",
+            selected_year=selected_year,
+            year_options=list(range(date.today().year, MIN_YEAR - 1, -1)),
         )
+
+    for item in results:
+        item.pdf_status = repository_client.get_pdf_status(item.eprint_id)
 
     pagination_pages = make_pagination_pages(pagination["current"], pagination["total_pages"])
 
     return render_template(
         "index.html",
         query=q,
+        selected_year=selected_year,
+        year_options=list(range(date.today().year, MIN_YEAR - 1, -1)),
         results=results,
         pagination=pagination,
         pagination_pages=pagination_pages,

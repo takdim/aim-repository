@@ -107,6 +107,22 @@ a:hover { text-decoration: underline; }
 }
 .search-input-wrap.hero .search-input { font-size: 1.1rem; padding: .85rem 1.4rem; }
 
+.year-select {
+  border: none;
+  border-right: 1px solid var(--gray-200);
+  outline: none;
+  background: var(--white);
+  color: var(--gray-600);
+  font-size: .9rem;
+  font-family: var(--font);
+  padding: 0 .8rem;
+  cursor: pointer;
+}
+.search-input-wrap.hero .year-select {
+  font-size: .95rem;
+  padding: 0 1rem;
+}
+
 .search-btn {
   background: var(--blue-dark);
   border: none;
@@ -254,6 +270,30 @@ a:hover { text-decoration: underline; }
   border-radius: 4px;
   padding: .1rem .4rem;
   font-size: .8rem;
+}
+
+.meta-pdf {
+  border-radius: 999px;
+  padding: .12rem .55rem;
+  font-size: .76rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+.pdf-available {
+  background: #e6fffa;
+  color: #216749;
+}
+.pdf-restricted {
+  background: #fff5f5;
+  color: #c53030;
+}
+.pdf-unavailable {
+  background: #f7fafc;
+  color: #4a5568;
+}
+.pdf-unknown {
+  background: #fffbea;
+  color: #744210;
 }
 
 /* ── Pagination ───────────────────────────────────────────── */
@@ -770,6 +810,25 @@ a:hover { text-decoration: underline; }
   padding: .35rem;
   background: #111827;
   flex-shrink: 0;
+}
+
+/* ── Print Protection (viewer) ───────────────────────────── */
+@media print {
+  .viewer-body * {
+    display: none !important;
+  }
+
+  .viewer-body {
+    background: #fff !important;
+  }
+
+  .viewer-body::before {
+    content: "Print dinonaktifkan untuk dokumen ini.";
+    display: block !important;
+    color: #000;
+    font-size: 14pt;
+    padding: 2cm;
+  }
 }
 
 /* ── Responsive ───────────────────────────────────────────── */

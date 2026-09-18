@@ -16,6 +16,12 @@
     </a>
     <form class="header-search-form" action="{{ url_for('main.search') }}" method="get">
       <div class="search-input-wrap compact">
+        <select name="year" class="year-select" aria-label="Filter tahun">
+          <option value="">Semua tahun</option>
+          {% for y in year_options %}
+          <option value="{{ y }}" {% if selected_year == y|string %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
         <input
           type="text"
           name="q"
@@ -23,7 +29,6 @@
           value="{{ query|e }}"
           placeholder="Cari judul, penulis, topik…"
           autocomplete="off"
-          required
         />
         <button type="submit" class="search-btn" aria-label="Cari">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -48,6 +53,12 @@
 
     <form class="hero-form" action="{{ url_for('main.search') }}" method="get" id="searchForm">
       <div class="search-input-wrap hero">
+        <select name="year" class="year-select" aria-label="Filter tahun">
+          <option value="">Semua tahun</option>
+          {% for y in year_options %}
+          <option value="{{ y }}" {% if selected_year == y|string %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
         <input
           type="text"
           name="q"
@@ -56,7 +67,6 @@
           placeholder="Cari judul, penulis, kata kunci…"
           autocomplete="off"
           autofocus
-          required
         />
         <button type="submit" class="search-btn" aria-label="Cari">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -91,7 +101,10 @@
         Menampilkan
         <strong>{{ ((pagination.current - 1) * pagination.per_page) + 1 }}</strong>–<strong>{{ [pagination.current * pagination.per_page, pagination.total_results] | min }}</strong>
         dari <strong>{{ pagination.total_results }}</strong> hasil untuk
-        "<em>{{ query|e }}</em>"
+        "<em>{{ query|e if query else 'semua dokumen' }}</em>"
+        {% if selected_year %}
+        pada tahun <strong>{{ selected_year }}</strong>
+        {% endif %}
       </span>
     </div>
 
@@ -105,6 +118,15 @@
           {% if item.author %}<span class="meta-author">{{ item.author }}</span>{% endif %}
           {% if item.year %}<span class="meta-year">{{ item.year }}</span>{% endif %}
           {% if item.item_type %}<span class="meta-type">{{ item.item_type }}</span>{% endif %}
+          {% if item.pdf_status == 'available' %}
+          <span class="meta-pdf pdf-available">PDF tersedia</span>
+          {% elif item.pdf_status == 'restricted' %}
+          <span class="meta-pdf pdf-restricted">PDF terbatas</span>
+          {% elif item.pdf_status == 'unavailable' %}
+          <span class="meta-pdf pdf-unavailable">PDF tidak tersedia</span>
+          {% else %}
+          <span class="meta-pdf pdf-unknown">Status PDF tidak diketahui</span>
+          {% endif %}
         </div>
       </li>
       {% endfor %}
@@ -114,7 +136,7 @@
     {% if pagination.total_pages > 1 %}
     <nav class="pagination" aria-label="Navigasi halaman">
       {% if pagination.current > 1 %}
-      <a href="{{ url_for('main.search', q=query, page=pagination.current - 1) }}" class="page-btn">← Sebelumnya</a>
+      <a href="{{ url_for('main.search', q=query, year=selected_year, page=pagination.current - 1) }}" class="page-btn">← Sebelumnya</a>
       {% else %}
       <span class="page-btn disabled">← Sebelumnya</span>
       {% endif %}
@@ -126,13 +148,13 @@
           {% elif p == pagination.current %}
           <span class="page-btn active">{{ p }}</span>
           {% else %}
-          <a href="{{ url_for('main.search', q=query, page=p) }}" class="page-btn">{{ p }}</a>
+          <a href="{{ url_for('main.search', q=query, year=selected_year, page=p) }}" class="page-btn">{{ p }}</a>
           {% endif %}
         {% endfor %}
       </div>
 
       {% if pagination.current < pagination.total_pages %}
-      <a href="{{ url_for('main.search', q=query, page=pagination.current + 1) }}" class="page-btn">Selanjutnya →</a>
+      <a href="{{ url_for('main.search', q=query, year=selected_year, page=pagination.current + 1) }}" class="page-btn">Selanjutnya →</a>
       {% else %}
       <span class="page-btn disabled">Selanjutnya →</span>
       {% endif %}

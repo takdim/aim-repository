@@ -95,6 +95,31 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+// Proteksi anti-print untuk semua halaman viewer (normal/restricted/error)
+(function () {
+  function isPrintShortcut(e) {
+    const key = String(e.key || '').toLowerCase();
+    return (e.ctrlKey || e.metaKey) && key === 'p';
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (isPrintShortcut(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
+  }, true);
+
+  const originalPrint = window.print;
+  window.print = function () {
+    return undefined;
+  };
+
+  // Simpan reference agar tidak di-tree-shake/minify dan mudah debug jika perlu rollback
+  window.__originalPrint = originalPrint;
+})();
+</script>
 {% if not restricted and load_error is not defined %}
 <script>
   // Data injected server-side — URL file asli TIDAK dimasukkan ke sini

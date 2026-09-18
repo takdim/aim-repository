@@ -2,11 +2,13 @@
 document.addEventListener('DOMContentLoaded', function () {
   const form = document.getElementById('searchForm');
   const input = document.getElementById('searchInput');
+  const yearSelect = form ? form.querySelector('select[name="year"]') : null;
 
   if (form && input) {
     form.addEventListener('submit', function (e) {
       const q = input.value.trim();
-      if (!q) {
+      const selectedYear = yearSelect ? yearSelect.value.trim() : '';
+      if (!q && !selectedYear) {
         e.preventDefault();
         input.focus();
       }
