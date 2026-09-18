@@ -100,14 +100,7 @@ def _collect_repository_items(q: str, year_filter: int | None, limit: int) -> li
             break
 
         for row in batch:
-            abstract = ""
             pdf_status = "unknown"
-            try:
-                detail = repository_client.get_detail(row.eprint_id)
-                abstract = _short_abstract(detail.abstract)
-            except Exception:
-                abstract = ""
-
             try:
                 pdf_status = repository_client.get_pdf_status(row.eprint_id)
             except Exception:
@@ -119,7 +112,7 @@ def _collect_repository_items(q: str, year_filter: int | None, limit: int) -> li
                     "source_id": row.eprint_id,
                     "eprint_id": row.eprint_id,
                     "title": row.title,
-                    "abstract": abstract,
+                    "abstract": "",
                     "author": row.author,
                     "year": row.year,
                     "item_type": row.item_type,
@@ -195,17 +188,34 @@ def search():
     except (ValueError, TypeError):
         page = 1
 
+    # Cache final combined search result per query+year+page untuk percepat query berulang.
+    result_cache_key = f"search:combined:{q.lower()}:{year_filter or ''}:{page}"
+    cached_payload = metadata_cache.get(result_cache_key)
+    if cached_payload:
+        return render_template(
+            "index.html",
+            query=q,
+            selected_year=selected_year,
+            year_options=list(range(date.today().year, MIN_YEAR - 1, -1)),
+            results=cached_payload["results"],
+            pagination=cached_payload["pagination"],
+            pagination_pages=cached_payload["pagination_pages"],
+        )
+
+    # Fetch bertahap: cukup ambil kelipatan kecil dari page size agar respons tetap cepat.
+    fetch_limit = min(COMBINED_FETCH_LIMIT, max(ITEMS_PER_PAGE * 2, page * ITEMS_PER_PAGE + ITEMS_PER_PAGE))
+
     repo_failed = False
     rta_failed = False
 
     try:
-        repo_items = _collect_repository_items(q, year_filter, COMBINED_FETCH_LIMIT)
+        repo_items = _collect_repository_items(q, year_filter, fetch_limit)
     except Exception:
         repo_failed = True
         repo_items = []
 
     try:
-        rta_items = rta_client.search_approved(q, year_filter, COMBINED_FETCH_LIMIT)
+        rta_items = rta_client.search_approved(q, year_filter, fetch_limit)
         for item in rta_items:
             item["abstract"] = _short_abstract(item.get("abstract", ""))
     except Exception:
@@ -237,6 +247,16 @@ def search():
     }
 
     pagination_pages = make_pagination_pages(pagination["current"], pagination["total_pages"])
+
+    metadata_cache.set(
+        result_cache_key,
+        {
+            "results": results,
+            "pagination": pagination,
+            "pagination_pages": pagination_pages,
+        },
+        ttl=180,
+    )
 
     return render_template(
         "index.html",

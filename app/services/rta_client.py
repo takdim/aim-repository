@@ -64,8 +64,8 @@ class RTAClient:
         self.verify_ssl = os.environ.get("RTA_VERIFY_SSL", "1") == "1"
         self.timeout = int(os.environ.get("RTA_REQUEST_TIMEOUT_SECONDS", "20"))
         self.max_items = int(os.environ.get("RTA_MAX_ITEMS", "120"))
-        self.max_scan_items = int(os.environ.get("RTA_MAX_SCAN_ITEMS", "600"))
-        self.max_detail_scan_items = int(os.environ.get("RTA_MAX_DETAIL_SCAN_ITEMS", "140"))
+        self.max_scan_items = int(os.environ.get("RTA_MAX_SCAN_ITEMS", "280"))
+        self.max_detail_scan_items = int(os.environ.get("RTA_MAX_DETAIL_SCAN_ITEMS", "60"))
 
         self.headers = {
             "User-Agent": (
@@ -139,7 +139,13 @@ class RTAClient:
             with requests.Session() as session:
                 self._login(session)
                 # search_values di RTA cenderung untuk NIM/Nama, jadi query judul diproses lokal.
-                scan_limit = min(self.max_scan_items, max_items if not tokens else self.max_scan_items)
+                if tokens:
+                    scan_limit = min(self.max_scan_items, max(max_items * 3, 120))
+                    detail_limit = min(self.max_detail_scan_items, max(max_items, 30))
+                else:
+                    scan_limit = min(self.max_scan_items, max(max_items * 2, 80))
+                    detail_limit = min(self.max_detail_scan_items, max(max_items // 2, 20))
+
                 rows = self._fetch_yajra_rows(session, "", year_value, scan_limit)
                 items: list[dict] = []
                 detail_candidates: list[dict] = []
@@ -173,7 +179,7 @@ class RTAClient:
                 if len(items) < max_items:
                     detail_count = 0
                     for row in detail_candidates:
-                        if detail_count >= self.max_detail_scan_items:
+                        if detail_count >= detail_limit:
                             break
 
                         row_item = self._row_to_item(session, row, fetch_detail=True)
