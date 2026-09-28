@@ -1,6 +1,7 @@
 import io
 import os
 import threading
+from pathlib import Path
 from typing import Optional
 
 import fitz  # PyMuPDF
@@ -11,6 +12,7 @@ from .cache import pdf_bytes_cache
 
 WATERMARK_TEXT = "UNIVERSITAS HASANUDDIN"
 RENDER_SCALE = 1.5  # ~108 DPI rendering quality
+LOGO_PATH = Path(__file__).resolve().parent.parent / "static" / "img" / "logo_unhas.png"
 
 HEADERS = {
     "User-Agent": (
@@ -33,6 +35,75 @@ def _get_fetch_lock(key: str) -> threading.Lock:
 
 
 class PDFRenderer:
+    def _get_logo_rgba(self, max_width: int = 420, alpha_factor: float = 0.35) -> Optional[Image.Image]:
+        if not LOGO_PATH.exists():
+            return None
+
+        try:
+            logo = Image.open(LOGO_PATH).convert("RGBA")
+        except (OSError, IOError):
+            return None
+
+        if logo.width <= 0 or logo.height <= 0:
+            return None
+
+        target_w = min(max_width, logo.width)
+        target_h = max(1, int(target_w * (logo.height / logo.width)))
+        logo = logo.resize((target_w, target_h), Image.LANCZOS)
+
+        alpha = logo.getchannel("A")
+        alpha = alpha.point(lambda p: int(p * alpha_factor))
+        logo.putalpha(alpha)
+        return logo
+
+    def _apply_pdf_watermark(self, doc: fitz.Document) -> None:
+        logo = self._get_logo_rgba(max_width=520, alpha_factor=0.30)
+        logo_stream = None
+        logo_ratio = 1.0
+        if logo is not None:
+            buf = io.BytesIO()
+            logo.save(buf, format="PNG")
+            logo_stream = buf.getvalue()
+            logo_ratio = logo.height / max(1, logo.width)
+
+        for page in doc:
+            rect = page.rect
+            size = max(20, int(min(rect.width, rect.height) * 0.045))
+            wm_rect = fitz.Rect(
+                rect.x0 + rect.width * 0.08,
+                rect.y0 + rect.height * 0.50,
+                rect.x1 - rect.width * 0.08,
+                rect.y0 + rect.height * 0.62,
+            )
+            page.insert_textbox(
+                wm_rect,
+                WATERMARK_TEXT,
+                fontsize=size,
+                fontname="helv",
+                color=(0.35, 0.35, 0.35),
+                align=1,
+                overlay=True,
+                fill_opacity=0.22,
+                stroke_opacity=0.22,
+            )
+
+            if logo_stream:
+                logo_w = rect.width * 0.16
+                logo_h = logo_w * logo_ratio
+                gap = rect.height * 0.012
+
+                x0 = rect.x0 + (rect.width - logo_w) / 2
+                y1 = wm_rect.y0 - gap
+                y0 = y1 - logo_h
+
+                # Prevent logo from going off-page on small page sizes.
+                if y0 < rect.y0 + 8:
+                    y0 = rect.y0 + 8
+                    y1 = y0 + logo_h
+
+                logo_rect = fitz.Rect(x0, y0, x0 + logo_w, y1)
+                page.insert_image(logo_rect, stream=logo_stream, overlay=True, keep_proportion=True)
+
     # ─── PDF Fetching ─────────────────────────────────────────────────────────
 
     def _fetch_pdf(self, cache_key: str, file_url: str) -> bytes:
@@ -89,26 +160,7 @@ class PDFRenderer:
 
             doc = fitz.open(stream=src_pdf, filetype="pdf")
             try:
-                for page in doc:
-                    rect = page.rect
-                    size = max(20, int(min(rect.width, rect.height) * 0.045))
-                    wm_rect = fitz.Rect(
-                        rect.x0 + rect.width * 0.08,
-                        rect.y0 + rect.height * 0.46,
-                        rect.x1 - rect.width * 0.08,
-                        rect.y0 + rect.height * 0.58,
-                    )
-                    page.insert_textbox(
-                        wm_rect,
-                        WATERMARK_TEXT,
-                        fontsize=size,
-                        fontname="helv",
-                        color=(0.35, 0.35, 0.35),
-                        align=1,
-                        overlay=True,
-                        fill_opacity=0.22,
-                        stroke_opacity=0.22,
-                    )
+                self._apply_pdf_watermark(doc)
 
                 out = io.BytesIO()
                 doc.save(out, deflate=True, garbage=3)
@@ -134,26 +186,7 @@ class PDFRenderer:
 
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             try:
-                for page in doc:
-                    rect = page.rect
-                    size = max(20, int(min(rect.width, rect.height) * 0.045))
-                    wm_rect = fitz.Rect(
-                        rect.x0 + rect.width * 0.08,
-                        rect.y0 + rect.height * 0.46,
-                        rect.x1 - rect.width * 0.08,
-                        rect.y0 + rect.height * 0.58,
-                    )
-                    page.insert_textbox(
-                        wm_rect,
-                        WATERMARK_TEXT,
-                        fontsize=size,
-                        fontname="helv",
-                        color=(0.35, 0.35, 0.35),
-                        align=1,
-                        overlay=True,
-                        fill_opacity=0.22,
-                        stroke_opacity=0.22,
-                    )
+                self._apply_pdf_watermark(doc)
 
                 out = io.BytesIO()
                 doc.save(out, deflate=True, garbage=3)
@@ -205,6 +238,7 @@ class PDFRenderer:
         w, h = img.size
         font_size = max(28, int(min(w, h) * 0.055))
         font = self._load_font(font_size)
+        logo = self._get_logo_rgba(max_width=max(140, int(min(w, h) * 0.26)), alpha_factor=0.32)
 
         # Measure text
         tmp = Image.new("RGBA", (1, 1))
@@ -213,11 +247,25 @@ class PDFRenderer:
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
 
-        # Draw text on transparent canvas
+        # Draw logo + text on transparent canvas (logo above text)
         pad = 24
-        txt_img = Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
+        logo_h = logo.height if logo else 0
+        logo_w = logo.width if logo else 0
+        gap = max(8, int(font_size * 0.28)) if logo else 0
+        block_w = max(tw, logo_w) + pad * 2
+        block_h = th + logo_h + gap + pad * 2
+
+        txt_img = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
         txt_draw = ImageDraw.Draw(txt_img)
-        txt_draw.text((pad, pad), WATERMARK_TEXT, font=font, fill=(80, 80, 80, 72))
+
+        current_y = pad
+        if logo:
+            logo_x = (block_w - logo_w) // 2
+            txt_img.paste(logo, (logo_x, current_y), logo)
+            current_y += logo_h + gap
+
+        text_x = (block_w - tw) // 2
+        txt_draw.text((text_x, current_y), WATERMARK_TEXT, font=font, fill=(80, 80, 80, 72))
 
         # Rotate 45° diagonal
         rotated = txt_img.rotate(45, expand=True, resample=Image.BICUBIC)
