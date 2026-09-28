@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}
-  {% if eprint is defined %}{{ eprint.title[:60] }} — Unhas Read Only{% else %}Detail Dokumen{% endif %}
+  {% if eprint is defined %}{{ eprint.title[:60] }} — SIDORA{% else %}Detail Dokumen{% endif %}
 {% endblock %}
 
 {% block extra_head %}
@@ -18,8 +18,8 @@
 <header class="site-header">
   <div class="header-inner">
     <a href="{{ url_for('main.index') }}" class="site-logo">
-      <span class="logo-icon">🏛</span>
-      <span class="logo-text">Unhas <strong>Read Only</strong></span>
+      <img src="{{ url_for('static', filename='img/logo_unhas.png') }}" alt="SIDORA Logo" class="header-logo-img" />
+      <span class="logo-text">SIDORA<strong></strong></span>
     </a>
   </div>
 </header>

@@ -38,6 +38,32 @@ body {
 a { color: var(--blue-mid); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* ── SIDORA Logo Styling ── */
+.hero-logo-img {
+  height: 120px;
+  width: auto;
+  margin-bottom: 20px;
+  object-fit: contain;
+}
+
+.header-logo-img {
+  height: 40px;
+  width: auto;
+  margin-right: 12px;
+  object-fit: contain;
+}
+
+.logo-text {
+  font-weight: 600;
+  font-size: 1.2rem;
+  letter-spacing: 0.5px;
+}
+
+.logo-text strong {
+  font-weight: 700;
+  margin-left: 4px;
+}
+
 /* ── Site Header ──────────────────────────────────────────── */
 .site-header {
   background: var(--blue-dark);
