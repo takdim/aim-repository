@@ -2,6 +2,7 @@ import re
 import os
 from html import escape
 from datetime import date
+from urllib.parse import urlparse
 
 from flask import (
     Blueprint,
@@ -71,6 +72,26 @@ def _absolute_url(path_or_url: str) -> str:
 def _publication_date(year_text: str) -> str:
     year = (year_text or "").strip()
     return f"{year}/01/01" if re.fullmatch(r"\d{4}", year) else ""
+
+
+def _safe_back_url(raw_back: str) -> str:
+    raw = (raw_back or "").strip()
+    if not raw:
+        return url_for("main.index")
+
+    if raw.startswith("/search") or raw == "/":
+        return raw
+
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        site = urlparse(SITE_BASE_URL)
+        if parsed.netloc == site.netloc and (parsed.path.startswith("/search") or parsed.path == "/"):
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+            return path
+
+    return url_for("main.index")
 
 
 def _find_open_doc_for_pdf(eprint) -> object | None:
@@ -274,12 +295,7 @@ def detail(eprint_id: str):
     if not eprint_id.isdigit():
         abort(400)
 
-    # Ambil back_url dari query param — validasi hanya boleh path internal
-    raw_back = request.args.get("back", "")
-    if raw_back.startswith("/search") or raw_back == "/":
-        back_url = raw_back
-    else:
-        back_url = url_for("main.index")
+    back_url = _safe_back_url(request.args.get("back", ""))
 
     try:
         eprint = repository_client.get_detail(eprint_id)
@@ -322,11 +338,7 @@ def detail_rta(source_id: str):
     if not source_id.isdigit():
         abort(400)
 
-    raw_back = request.args.get("back", "")
-    if raw_back.startswith("/search") or raw_back == "/":
-        back_url = raw_back
-    else:
-        back_url = url_for("main.index")
+    back_url = _safe_back_url(request.args.get("back", ""))
 
     detail_data = rta_client.get_detail_by_id(source_id)
     if not detail_data:
@@ -468,6 +480,48 @@ def rta_login_check():
     result = rta_client.login_check()
     status_code = 200 if result.get("ok") else 400
     return jsonify(result), status_code
+
+
+@main.route("/api/rta/pdf-inline/<source_id>/<doc_kind>")
+def api_rta_pdf_inline(source_id: str, doc_kind: str):
+    if not source_id.isdigit():
+        abort(400)
+    if not re.match(r"^[a-z0-9_]+$", doc_kind):
+        abort(400)
+
+    detail_data = rta_client.get_detail_by_id(source_id)
+    if not detail_data:
+        abort(503)
+
+    documents = detail_data.get("documents", [])
+    doc = next((d for d in documents if str(d.get("kind", "")) == doc_kind), None)
+    if doc is None:
+        abort(404)
+
+    file_url = str(doc.get("url", "")).strip()
+    if not file_url:
+        abort(404)
+
+    try:
+        src_pdf_bytes = rta_client.fetch_attachment_pdf(file_url)
+        pdf_bytes = pdf_renderer.get_watermarked_pdf_from_bytes(
+            f"rta:{source_id}:{doc_kind}",
+            src_pdf_bytes,
+        )
+    except Exception:
+        abort(500)
+
+    filename = f"rta-{source_id}-{doc_kind}.pdf"
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "private, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "SAMEORIGIN",
+        },
+    )
 
 
 @main.route("/robots.txt")

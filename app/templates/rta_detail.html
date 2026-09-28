@@ -39,6 +39,15 @@
 
       <div class="eprint-meta">
         <div class="meta-row"><span class="meta-label">Sumber</span><span>RTA (Disetujui)</span></div>
+        {% if item.author %}
+        <div class="meta-row"><span class="meta-label">Penulis</span><span>{{ item.author }}</span></div>
+        {% endif %}
+        {% if item.year %}
+        <div class="meta-row"><span class="meta-label">Tahun</span><span>{{ item.year }}</span></div>
+        {% endif %}
+        {% if item.item_type %}
+        <div class="meta-row"><span class="meta-label">Prodi</span><span>{{ item.item_type }}</span></div>
+        {% endif %}
         {% if detail_uri %}
         <div class="meta-row"><span class="meta-label">Permalink</span><span><a href="{{ detail_uri }}" target="_blank" rel="noopener">{{ detail_uri }}</a></span></div>
         {% endif %}
@@ -56,6 +65,28 @@
       </div>
       {% endif %}
     </article>
+
+    {% if item.documents %}
+    <section class="docs-section">
+      <h2 class="docs-heading">Dokumen Tersedia</h2>
+      <div class="docs-grid">
+        {% for doc in item.documents %}
+        <a class="doc-card" href="{% if doc.kind in ['bab1_2', 'dapus', 'full_text'] %}{{ url_for('main.api_rta_pdf_inline', source_id=item.source_id, doc_kind=doc.kind) }}{% else %}{{ doc.url }}{% endif %}" target="_blank" rel="noopener noreferrer">
+          <div class="doc-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          </div>
+          <div class="doc-info">
+            <span class="doc-label">{{ doc.label }}</span>
+            <span class="doc-status available">Buka dokumen</span>
+          </div>
+          <div class="doc-arrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
     {% endif %}
   </div>
 </main>

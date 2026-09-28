@@ -44,6 +44,43 @@ def _looks_like_placeholder_title(value: str) -> bool:
     return False
 
 
+def _attachment_label_from_text(text: str) -> str:
+    t = _clean_text(text).lower()
+    if not t:
+        return "Dokumen"
+
+    if re.search(r"bab\s*(i|1)\s*[-–/]?\s*(ii|2)|bab\s*1\s*(dan|&)\s*2", t):
+        return "Bab 1-2"
+    if "daftar pustaka" in t or "dapus" in t:
+        return "Daftar Pustaka"
+    if "full text" in t or "fulltext" in t:
+        return "Full Text"
+    return "Dokumen"
+
+
+def _doc_kind_from_label(label: str) -> str:
+    text = _clean_text(label).lower()
+    if text == "bab 1-2":
+        return "bab1_2"
+    if text == "daftar pustaka":
+        return "dapus"
+    if text == "full text":
+        return "full_text"
+    return "dokumen"
+
+
+def _normalize_author(value: str) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+
+    text = re.sub(r"(?i)^nama\s+lengkap\s*:\s*", "", text).strip()
+    text = re.sub(r"(?i)^lengkap\s*:\s*", "", text).strip()
+    text = re.sub(r"(?i)^nama\s*(mahasiswa)?\s*:\s*", "", text).strip()
+    text = re.split(r"(?i)\b(nomor induk|nim|angkatan|handphone|no\.?\s*hp|email)\b", text, maxsplit=1)[0].strip()
+    return text
+
+
 class RTAClient:
     def __init__(self) -> None:
         self.login_url = (
@@ -213,7 +250,7 @@ class RTAClient:
         if not source_id.isdigit() or not self.is_configured():
             return None
 
-        cache_key = f"rta:detail-by-id:{source_id}"
+        cache_key = f"rta:detail-by-id:v3:{source_id}"
         cached = metadata_cache.get(cache_key)
         if cached:
             return cached
@@ -236,6 +273,10 @@ class RTAClient:
                     "source_url": detail_url,
                     "title": title,
                     "abstract": abstract,
+                    "author": _clean_text(summary.get("author", "")),
+                    "year": _clean_text(summary.get("year", "")),
+                    "item_type": _clean_text(summary.get("item_type", "")),
+                    "documents": summary.get("documents", []),
                 }
                 metadata_cache.set(cache_key, result, ttl=900)
                 return result
@@ -282,6 +323,27 @@ class RTAClient:
             verify=self.verify_ssl,
             allow_redirects=True,
         )
+
+    def fetch_attachment_pdf(self, file_url: str) -> bytes:
+        if not self.is_configured():
+            raise requests.RequestException("RTA client belum terkonfigurasi")
+
+        with requests.Session() as session:
+            self._login(session)
+            resp = session.get(
+                file_url,
+                headers=self.headers,
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+                allow_redirects=True,
+            )
+            resp.raise_for_status()
+
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            if "application/pdf" not in content_type and not file_url.lower().endswith(".pdf"):
+                raise requests.RequestException("Lampiran RTA bukan PDF")
+
+            return resp.content
 
     def _fetch_yajra_rows(
         self,
@@ -376,7 +438,7 @@ class RTAClient:
         }
 
     def _fetch_detail_summary(self, session: requests.Session, detail_url: str) -> dict:
-        cache_key = f"rta:detil:{detail_url}"
+        cache_key = f"rta:detil:v3:{detail_url}"
         cached = metadata_cache.get(cache_key)
         if cached:
             return cached
@@ -392,6 +454,9 @@ class RTAClient:
         soup = BeautifulSoup(resp.text, "lxml")
         title = ""
         abstract = ""
+        author = ""
+        year = ""
+        item_type = ""
 
         # Pola paling stabil: span id="item-*" dipasangkan dengan strong.text-primary terdekat sebelumnya.
         for span in soup.select("span[id^='item-']"):
@@ -432,7 +497,110 @@ class RTAClient:
             if heading:
                 title = _clean_text(heading.get_text(" ", strip=True))
 
-        data = {"title": title, "abstract": abstract}
+        # Ekstraksi metadata tambahan (penulis/tahun/prodi) dari label terdekat.
+        for span in soup.select("span[id^='item-']"):
+            value = _clean_text(span.get_text(" ", strip=True))
+            if not value:
+                continue
+
+            label_node = span.find_previous("strong", class_="text-primary")
+            label = _clean_text(label_node.get_text(" ", strip=True)).lower() if label_node else ""
+
+            if not author and ("nama" in label or "mahasiswa" in label):
+                author = _normalize_author(value)
+
+            if not item_type and ("prodi" in label or "program studi" in label):
+                item_type = value
+
+            if not year and ("tahun" in label or "wisuda" in label):
+                m_year = re.search(r"\b(19|20)\d{2}\b", value)
+                if m_year:
+                    year = m_year.group(0)
+
+        # Fallback metadata jika pola utama tidak tersedia.
+        if not author or not item_type or not year:
+            for strong in soup.select("strong.text-primary"):
+                label = _clean_text(strong.get_text(" ", strip=True)).lower()
+                container = strong.find_parent("div") or strong.find_parent("td") or strong.parent
+                if container is None:
+                    continue
+                content = _clean_text(container.get_text(" ", strip=True))
+
+                if not author and ("nama" in label or "mahasiswa" in label):
+                    author = _normalize_author(content)
+
+                if not item_type and ("prodi" in label or "program studi" in label):
+                    item_type = re.sub(r"(?i)^(prodi|program studi)\s*", "", content).strip()
+
+                if not year and ("tahun" in label or "wisuda" in label):
+                    m_year = re.search(r"\b(19|20)\d{2}\b", content)
+                    if m_year:
+                        year = m_year.group(0)
+
+        documents: list[dict] = []
+        seen_urls: set[str] = set()
+
+        for a in soup.find_all("a", href=True):
+            href = str(a.get("href", "")).strip()
+            if not href:
+                continue
+            if not re.search(r"/attachments/\d+/show/.*\.pdf", href, re.I):
+                continue
+
+            url = href
+            if not url.startswith("http"):
+                url = urljoin("https://regtugasakhir.unhas.ac.id", url)
+
+            if url in seen_urls:
+                continue
+
+            context_parts: list[str] = [_clean_text(a.get_text(" ", strip=True))]
+            node = a
+            for _ in range(6):
+                node = node.parent
+                if node is None:
+                    break
+                context_parts.append(_clean_text(node.get_text(" ", strip=True)))
+
+            label = "Dokumen"
+            for part in context_parts:
+                candidate = _attachment_label_from_text(part)
+                if candidate != "Dokumen":
+                    label = candidate
+                    break
+
+            documents.append(
+                {
+                    "label": label,
+                    "kind": _doc_kind_from_label(label),
+                    "url": url,
+                }
+            )
+            seen_urls.add(url)
+
+        # Prioritaskan urutan label agar Bab 1-2 muncul lebih dulu jika ada.
+        order = {"Bab 1-2": 0, "Daftar Pustaka": 1, "Full Text": 2, "Dokumen": 3}
+        documents.sort(key=lambda d: (order.get(d.get("label", "Dokumen"), 99), d.get("label", ""), d.get("url", "")))
+
+        # Tampilkan satu item per label agar UI tidak menampilkan tipe dokumen yang sama berulang.
+        unique_by_label: list[dict] = []
+        seen_labels: set[str] = set()
+        for doc in documents:
+            label = str(doc.get("label", "Dokumen")).strip() or "Dokumen"
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            unique_by_label.append(doc)
+        documents = unique_by_label
+
+        data = {
+            "title": title,
+            "abstract": abstract,
+            "author": author,
+            "year": year,
+            "item_type": item_type,
+            "documents": documents,
+        }
         metadata_cache.set(cache_key, data, ttl=1800)
         return data
 

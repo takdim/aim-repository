@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .cache import pdf_bytes_cache
 
-WATERMARK_TEXT = "Milik Universitas Hasanuddin"
+WATERMARK_TEXT = "UNIVERSITAS HASANUDDIN"
 RENDER_SCALE = 1.5  # ~108 DPI rendering quality
 
 HEADERS = {
@@ -88,6 +88,51 @@ class PDFRenderer:
                 return cached_wm
 
             doc = fitz.open(stream=src_pdf, filetype="pdf")
+            try:
+                for page in doc:
+                    rect = page.rect
+                    size = max(20, int(min(rect.width, rect.height) * 0.045))
+                    wm_rect = fitz.Rect(
+                        rect.x0 + rect.width * 0.08,
+                        rect.y0 + rect.height * 0.46,
+                        rect.x1 - rect.width * 0.08,
+                        rect.y0 + rect.height * 0.58,
+                    )
+                    page.insert_textbox(
+                        wm_rect,
+                        WATERMARK_TEXT,
+                        fontsize=size,
+                        fontname="helv",
+                        color=(0.35, 0.35, 0.35),
+                        align=1,
+                        overlay=True,
+                        fill_opacity=0.22,
+                        stroke_opacity=0.22,
+                    )
+
+                out = io.BytesIO()
+                doc.save(out, deflate=True, garbage=3)
+                wm_bytes = out.getvalue()
+            finally:
+                doc.close()
+
+            pdf_bytes_cache.set(wm_cache_key, wm_bytes, ttl=300)
+            return wm_bytes
+
+    def get_watermarked_pdf_from_bytes(self, cache_id: str, pdf_bytes: bytes) -> bytes:
+        wm_cache_key = f"pdfwm:{cache_id}"
+
+        cached_wm = pdf_bytes_cache.get(wm_cache_key)
+        if cached_wm:
+            return cached_wm
+
+        lock = _get_fetch_lock(wm_cache_key)
+        with lock:
+            cached_wm = pdf_bytes_cache.get(wm_cache_key)
+            if cached_wm:
+                return cached_wm
+
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             try:
                 for page in doc:
                     rect = page.rect
