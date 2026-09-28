@@ -61,7 +61,7 @@ class RepositoryClient:
 
     def search(self, query: str, page: int = 1) -> tuple[list, dict]:
         """
-        Cari di repository Unhas. Return (results, pagination_info).
+        Cari di Unhas Read Only. Return (results, pagination_info).
         Hasil di-cache 10 menit.
         """
         cache_key = f"search:{query.lower()}:{page}"

@@ -1,4 +1,4 @@
-# PRD — Unhas Repository Search & Secure Viewer
+# PRD — Unhas Read Only Search & Secure Viewer
 
 Versi: 1.3 (As-Built)
 Tanggal: 18 September 2026
@@ -9,7 +9,7 @@ Stack: Python + Flask + vanilla JS/HTML/CSS
 
 ## 1. Ringkasan Produk
 
-Aplikasi web ini membungkus pencarian repository Unhas (repository.unhas.ac.id), menampilkan hasil dengan pagination, halaman detail eprint, dan viewer dokumen read-only berbasis render gambar per halaman.
+Aplikasi web ini membungkus pencarian Unhas Read Only (repository.unhas.ac.id), menampilkan hasil dengan pagination, halaman detail eprint, dan viewer dokumen read-only berbasis render gambar per halaman.
 
 Fokus produk:
 1. Mempermudah pencarian dokumen akademik.

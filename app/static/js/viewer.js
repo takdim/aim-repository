@@ -10,6 +10,8 @@
 let currentPage = 1;
 let totalPages  = 0;
 let isLoading   = false;
+let eprintId    = '';
+let docType     = '';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const imgEl        = document.getElementById('pdfPageImg');
@@ -25,9 +27,20 @@ const btnLast      = document.getElementById('btnLast');
 
 // ── Init ──────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', function () {
+  const viewerData = document.getElementById('viewerData');
+  if (viewerData) {
+    eprintId = viewerData.getAttribute('data-eprint-id') || '';
+    docType = viewerData.getAttribute('data-doc-type') || '';
+  }
+
   if (!imgEl) return;  // viewer tidak dirender (restricted/error)
-  loadPage(1);
+  if (!eprintId || !docType) {
+    showError();
+    return;
+  }
+
   bindEvents();
+  loadPage(1);
 });
 
 // ── Load page ─────────────────────────────────────────────────────────────
@@ -42,7 +55,7 @@ function loadPage(page) {
   hideError();
   imgEl.style.display = 'none';
 
-  const url = `/api/page-image/${EPRINT_ID}/${DOC_TYPE}/${page}`;
+  const url = `/api/page-image/${eprintId}/${docType}/${page}`;
 
   fetch(url, { credentials: 'same-origin' })
     .then(function (resp) {
@@ -139,6 +152,36 @@ function hideError() {
 
 // ── Event Bindings ────────────────────────────────────────────────────────
 function bindEvents() {
+  if (btnFirst) {
+    btnFirst.addEventListener('click', function () {
+      goToPage(1);
+    });
+  }
+  if (btnPrev) {
+    btnPrev.addEventListener('click', function () {
+      goToPage(currentPage - 1);
+    });
+  }
+  if (btnNext) {
+    btnNext.addEventListener('click', function () {
+      goToPage(currentPage + 1);
+    });
+  }
+  if (btnLast) {
+    btnLast.addEventListener('click', function () {
+      if (totalPages > 0) {
+        goToPage(totalPages);
+      }
+    });
+  }
+
+  const btnRetry = document.getElementById('btnRetry');
+  if (btnRetry) {
+    btnRetry.addEventListener('click', function () {
+      retryCurrentPage();
+    });
+  }
+
   // Page input — tekan Enter atau blur untuk pindah
   if (pageInput) {
     pageInput.addEventListener('keydown', function (e) {

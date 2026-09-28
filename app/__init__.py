@@ -1,7 +1,8 @@
 import os
+import secrets
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, Response
 
 
 def _load_dotenv_file() -> None:
@@ -25,7 +26,36 @@ def create_app() -> Flask:
     _load_dotenv_file()
 
     app = Flask(__name__)
-    app.secret_key = os.environ.get("APP_SECRET_KEY", "unhas-repo-viewer-dev-secret-2026")
+    app_secret = os.environ.get("APP_SECRET_KEY", "").strip()
+    app.secret_key = app_secret or secrets.token_urlsafe(48)
+
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
+    )
+
+    @app.after_request
+    def set_security_headers(response: Response) -> Response:
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob: https:; "
+            "font-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'",
+        )
+        return response
 
     from .routes import main
     app.register_blueprint(main)

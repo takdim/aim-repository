@@ -53,7 +53,7 @@
   </div>
   <div class="viewer-error-msg" id="viewerErrorMsg" style="display:none;">
     <span>⚠️ Gagal memuat halaman ini.</span>
-    <button onclick="retryCurrentPage()">Coba lagi</button>
+    <button id="btnRetry">Coba lagi</button>
   </div>
   <img
     id="pdfPageImg"
@@ -64,10 +64,17 @@
   />
 </div>
 
+<div
+  id="viewerData"
+  data-eprint-id="{{ eprint.eprint_id }}"
+  data-doc-type="{{ doc.doc_type }}"
+  hidden
+></div>
+
 {# ── Navigation Bar ── #}
 <nav class="viewer-navbar">
-  <button class="nav-btn" id="btnFirst" onclick="goToPage(1)" title="Halaman pertama">⏮</button>
-  <button class="nav-btn" id="btnPrev" onclick="goToPage(currentPage - 1)" title="Sebelumnya">◀</button>
+  <button class="nav-btn" id="btnFirst" title="Halaman pertama">⏮</button>
+  <button class="nav-btn" id="btnPrev" title="Sebelumnya">◀</button>
 
   <div class="nav-page-input">
     <input
@@ -80,8 +87,8 @@
     <span class="nav-page-sep">/ <span id="totalPageDisplay">—</span></span>
   </div>
 
-  <button class="nav-btn" id="btnNext" onclick="goToPage(currentPage + 1)" title="Selanjutnya">▶</button>
-  <button class="nav-btn" id="btnLast" onclick="goToPage(totalPages)" title="Halaman terakhir">⏭</button>
+  <button class="nav-btn" id="btnNext" title="Selanjutnya">▶</button>
+  <button class="nav-btn" id="btnLast" title="Halaman terakhir">⏭</button>
 </nav>
 {% endif %}
 
@@ -95,37 +102,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-// Proteksi anti-print untuk semua halaman viewer (normal/restricted/error)
-(function () {
-  function isPrintShortcut(e) {
-    const key = String(e.key || '').toLowerCase();
-    return (e.ctrlKey || e.metaKey) && key === 'p';
-  }
-
-  document.addEventListener('keydown', function (e) {
-    if (isPrintShortcut(e)) {
-      e.preventDefault();
-      e.stopPropagation();
-      return false;
-    }
-  }, true);
-
-  const originalPrint = window.print;
-  window.print = function () {
-    return undefined;
-  };
-
-  // Simpan reference agar tidak di-tree-shake/minify dan mudah debug jika perlu rollback
-  window.__originalPrint = originalPrint;
-})();
-</script>
+<script src="{{ url_for('static', filename='js/viewer_guard.js') }}"></script>
 {% if not restricted and load_error is not defined %}
-<script>
-  // Data injected server-side — URL file asli TIDAK dimasukkan ke sini
-  const EPRINT_ID = {{ eprint.eprint_id | tojson }};
-  const DOC_TYPE  = {{ doc.doc_type | tojson }};
-</script>
 <script src="{{ url_for('static', filename='js/viewer.js') }}"></script>
 {% endif %}
 {% endblock %}

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}
-  {% if eprint is defined %}{{ eprint.title[:60] }} — Unhas Repo{% else %}Detail Dokumen{% endif %}
+  {% if eprint is defined %}{{ eprint.title[:60] }} — Unhas Read Only{% else %}Detail Dokumen{% endif %}
 {% endblock %}
 
 {% block extra_head %}
@@ -19,7 +19,7 @@
   <div class="header-inner">
     <a href="{{ url_for('main.index') }}" class="site-logo">
       <span class="logo-icon">🏛</span>
-      <span class="logo-text">Unhas<strong>Repo</strong></span>
+      <span class="logo-text">Unhas <strong>Read Only</strong></span>
     </a>
   </div>
 </header>
@@ -33,7 +33,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       {{ error }}
     </div>
-    <a href="javascript:history.back()" class="btn-back">← Kembali</a>
+    <a href="{{ back_url if back_url is defined else url_for('main.index') }}" class="btn-back">← Kembali</a>
 
     {# ── Normal Detail ── #}
     {% elif eprint is defined %}
@@ -64,16 +64,12 @@
       <h2 class="docs-heading">Dokumen Tersedia</h2>
       <div class="docs-grid">
         {% for doc in eprint.documents %}
-        <div class="doc-card {% if doc.is_restricted %}doc-restricted{% endif %}"
-             {% if doc.is_restricted %}
-             onclick="showRestrictedModal()"
-             role="button" tabindex="0"
-             onkeydown="if(event.key==='Enter') showRestrictedModal()"
-             {% else %}
-             onclick="window.location.href='{{ url_for('main.view_pdf', eprint_id=eprint.eprint_id, doc_type=doc.doc_type) }}'"
-             role="button" tabindex="0"
-             onkeydown="if(event.key==='Enter') window.location.href='{{ url_for('main.view_pdf', eprint_id=eprint.eprint_id, doc_type=doc.doc_type) }}'"
-             {% endif %}
+        <div
+          class="doc-card {% if doc.is_restricted %}doc-restricted{% endif %}"
+          role="button"
+          tabindex="0"
+          data-restricted="{{ '1' if doc.is_restricted else '0' }}"
+          data-target-url="{{ url_for('main.view_pdf', eprint_id=eprint.eprint_id, doc_type=doc.doc_type) if not doc.is_restricted else '' }}"
         >
           <div class="doc-icon">
             {% if doc.is_restricted %}
@@ -113,12 +109,12 @@
 </main>
 
 {# ── Modal Restricted ── #}
-<div id="restrictedModal" class="modal-overlay" onclick="closeModal(event)" aria-hidden="true" role="dialog">
+<div id="restrictedModal" class="modal-overlay" aria-hidden="true" role="dialog">
   <div class="modal-box">
     <div class="modal-icon">🔒</div>
     <h3 class="modal-title">File Belum Tersedia</h3>
     <p class="modal-message">Maaf, file ini belum terbuka untuk umum dan hanya dapat diakses oleh staf repositori.</p>
-    <button class="modal-close-btn" onclick="document.getElementById('restrictedModal').classList.remove('active')" autofocus>
+    <button id="modalCloseBtn" class="modal-close-btn" autofocus>
       Tutup
     </button>
   </div>
@@ -127,24 +123,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-function showRestrictedModal() {
-  const modal = document.getElementById('restrictedModal');
-  modal.classList.add('active');
-  modal.setAttribute('aria-hidden', 'false');
-  modal.querySelector('.modal-close-btn').focus();
-}
-
-function closeModal(e) {
-  if (e.target.id === 'restrictedModal') {
-    document.getElementById('restrictedModal').classList.remove('active');
-  }
-}
-
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') {
-    document.getElementById('restrictedModal').classList.remove('active');
-  }
-});
-</script>
+<script src="{{ url_for('static', filename='js/detail.js') }}"></script>
 {% endblock %}

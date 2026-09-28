@@ -1,7 +1,7 @@
 """
-Unhas Repository PDF Scraper + Watermark Tool
+Unhas Read Only PDF Scraper + Watermark Tool
 =============================================
-- Scrape semua link PDF dari halaman repository Unhas
+- Scrape semua link PDF dari halaman Unhas Read Only
 - Download PDF dan tambahkan watermark
 - Usage: python unhas_scraper.py [URL]
 """
@@ -20,7 +20,7 @@ from pypdf import PdfReader, PdfWriter
 
 # ─── Konfigurasi ─────────────────────────────────────────────────────────────
 
-WATERMARK_TEXT = "© Repository Unhas - Hanya untuk keperluan akademik"
+WATERMARK_TEXT = "© Unhas Read Only - Hanya untuk keperluan akademik"
 OUTPUT_DIR = "downloaded_pdfs"
 HEADERS = {
     "User-Agent": (
