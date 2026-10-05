@@ -385,8 +385,43 @@ def view_pdf(eprint_id: str, doc_type: str):
     if doc.is_restricted:
         return render_template("viewer.html", eprint=eprint, doc=doc, restricted=True)
 
-    # Open-access → gunakan viewer PDF default browser (inline) dengan watermark.
-    return redirect(url_for("main.api_pdf_inline", eprint_id=eprint_id, doc_type=doc_type))
+    return render_template(
+        "viewer.html",
+        eprint=eprint,
+        doc=doc,
+        restricted=False,
+        viewer_document_id=eprint_id,
+        viewer_doc_type=doc_type,
+        viewer_page_url_prefix="/api/page-image",
+    )
+
+
+@main.route("/view/rta/<source_id>/<doc_kind>")
+def view_rta_pdf(source_id: str, doc_kind: str):
+    if not source_id.isdigit() or not re.match(r"^[a-z0-9_]+$", doc_kind):
+        abort(400)
+
+    detail_data = rta_client.get_detail_by_id(source_id)
+    if not detail_data:
+        abort(503)
+
+    doc = next(
+        (item for item in detail_data.get("documents", [])
+         if str(item.get("kind", "")) == doc_kind),
+        None,
+    )
+    if doc is None or not str(doc.get("url", "")).strip():
+        abort(404)
+
+    return render_template(
+        "viewer.html",
+        restricted=False,
+        back_url=url_for("main.detail_rta", source_id=source_id),
+        viewer_title=detail_data.get("title", "Dokumen RTA"),
+        viewer_document_id=source_id,
+        viewer_doc_type=doc_kind,
+        viewer_page_url_prefix="/api/rta/page-image",
+    )
 
 
 @main.route("/api/pdf-inline/<eprint_id>/<doc_type>")
@@ -395,6 +430,8 @@ def api_pdf_inline(eprint_id: str, doc_type: str):
         abort(400)
     if not re.match(r"^[a-z0-9_]+$", doc_type):
         abort(400)
+    if request.accept_mimetypes.best_match(["text/html", "application/pdf"]) == "text/html":
+        return redirect(url_for("main.view_pdf", eprint_id=eprint_id, doc_type=doc_type))
 
     try:
         eprint = repository_client.get_detail(eprint_id)
@@ -474,6 +511,50 @@ def api_page_image(eprint_id: str, doc_type: str, page_num: int):
     )
 
 
+@main.route("/api/rta/page-image/<source_id>/<doc_kind>/<int:page_num>")
+def api_rta_page_image(source_id: str, doc_kind: str, page_num: int):
+    if not source_id.isdigit() or not re.match(r"^[a-z0-9_]+$", doc_kind):
+        abort(400)
+    if page_num < 1:
+        abort(400)
+
+    detail_data = rta_client.get_detail_by_id(source_id)
+    if not detail_data:
+        abort(503)
+
+    doc = next(
+        (item for item in detail_data.get("documents", [])
+         if str(item.get("kind", "")) == doc_kind),
+        None,
+    )
+    file_url = str(doc.get("url", "")).strip() if doc else ""
+    if not file_url:
+        abort(404)
+
+    try:
+        src_pdf_bytes = rta_client.fetch_attachment_pdf(file_url)
+        img_bytes = pdf_renderer.render_page_from_bytes(
+            f"rta:{source_id}:{doc_kind}", page_num - 1, src_pdf_bytes
+        )
+        page_count = pdf_renderer.get_page_count_from_bytes(src_pdf_bytes)
+    except ValueError:
+        abort(404)
+    except Exception:
+        abort(500)
+
+    return Response(
+        img_bytes,
+        mimetype="image/jpeg",
+        headers={
+            "X-Page-Count": str(page_count),
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "SAMEORIGIN",
+        },
+    )
+
+
 @main.route("/api/rta/login-check", methods=["GET", "POST"])
 def rta_login_check():
     """Validasi kredensial login RTA dari .env (tanpa membocorkan nilai rahasia)."""
@@ -488,6 +569,8 @@ def api_rta_pdf_inline(source_id: str, doc_kind: str):
         abort(400)
     if not re.match(r"^[a-z0-9_]+$", doc_kind):
         abort(400)
+    if request.accept_mimetypes.best_match(["text/html", "application/pdf"]) == "text/html":
+        return redirect(url_for("main.view_rta_pdf", source_id=source_id, doc_kind=doc_kind))
 
     detail_data = rta_client.get_detail_by_id(source_id)
     if not detail_data:

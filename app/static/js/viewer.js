@@ -12,6 +12,7 @@ let totalPages  = 0;
 let isLoading   = false;
 let eprintId    = '';
 let docType     = '';
+let pageUrlPrefix = '';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const imgEl        = document.getElementById('pdfPageImg');
@@ -29,8 +30,9 @@ const btnLast      = document.getElementById('btnLast');
 window.addEventListener('DOMContentLoaded', function () {
   const viewerData = document.getElementById('viewerData');
   if (viewerData) {
-    eprintId = viewerData.getAttribute('data-eprint-id') || '';
+    eprintId = viewerData.getAttribute('data-document-id') || '';
     docType = viewerData.getAttribute('data-doc-type') || '';
+    pageUrlPrefix = viewerData.getAttribute('data-page-url-prefix') || '/api/page-image';
   }
 
   if (!imgEl) return;  // viewer tidak dirender (restricted/error)
@@ -55,7 +57,7 @@ function loadPage(page) {
   hideError();
   imgEl.style.display = 'none';
 
-  const url = `/api/page-image/${eprintId}/${docType}/${page}`;
+  const url = `${pageUrlPrefix}/${eprintId}/${docType}/${page}`;
 
   fetch(url, { credentials: 'same-origin' })
     .then(function (resp) {

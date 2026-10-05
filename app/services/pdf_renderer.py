@@ -57,7 +57,7 @@ class PDFRenderer:
         return logo
 
     def _apply_pdf_watermark(self, doc: fitz.Document) -> None:
-        logo = self._get_logo_rgba(max_width=520, alpha_factor=0.30)
+        logo = self._get_logo_rgba(max_width=520, alpha_factor=0.72)
         logo_stream = None
         logo_ratio = 1.0
         if logo is not None:
@@ -75,17 +75,18 @@ class PDFRenderer:
                 rect.x1 - rect.width * 0.08,
                 rect.y0 + rect.height * 0.62,
             )
-            page.insert_textbox(
-                wm_rect,
-                WATERMARK_TEXT,
-                fontsize=size,
-                fontname="helv",
-                color=(0.35, 0.35, 0.35),
-                align=1,
-                overlay=True,
-                fill_opacity=0.22,
-                stroke_opacity=0.22,
+            text_img = self._get_rotated_text_rgba(WATERMARK_TEXT, size)
+            text_buf = io.BytesIO()
+            text_img.save(text_buf, format="PNG")
+            text_w = min(rect.width * 0.84, text_img.width)
+            text_h = text_w * text_img.height / max(1, text_img.width)
+            text_rect = fitz.Rect(
+                rect.x0 + (rect.width - text_w) / 2,
+                wm_rect.y0 + (wm_rect.height - text_h) / 2,
+                rect.x0 + (rect.width + text_w) / 2,
+                wm_rect.y0 + (wm_rect.height + text_h) / 2,
             )
+            page.insert_image(text_rect, stream=text_buf.getvalue(), overlay=True)
 
             if logo_stream:
                 logo_w = rect.width * 0.16
@@ -138,6 +139,13 @@ class PDFRenderer:
         count = len(doc)
         doc.close()
         return count
+
+    def get_page_count_from_bytes(self, pdf_bytes: bytes) -> int:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            return len(doc)
+        finally:
+            doc.close()
 
     def get_watermarked_pdf(self, eprint_id: str, doc_type: str, file_url: str) -> bytes:
         """
@@ -209,6 +217,12 @@ class PDFRenderer:
         """
         cache_key = f"pdf:{eprint_id}:{doc_type}"
         pdf_bytes = self._fetch_pdf(cache_key, file_url)
+        return self.render_page_from_bytes(cache_key, page_num, pdf_bytes)
+
+    def render_page_from_bytes(
+        self, cache_id: str, page_num: int, pdf_bytes: bytes
+    ) -> bytes:
+        """Render one zero-based PDF page from already-fetched bytes."""
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         try:
@@ -234,47 +248,53 @@ class PDFRenderer:
 
     # ─── Watermark ────────────────────────────────────────────────────────────
 
+    def _get_rotated_text_rgba(self, text: str, font_size: int) -> Image.Image:
+        font = self._load_font(font_size)
+        probe = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(probe)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        padding = max(4, font_size // 5)
+        text_img = Image.new(
+            "RGBA",
+            (bbox[2] - bbox[0] + padding * 2, bbox[3] - bbox[1] + padding * 2),
+            (0, 0, 0, 0),
+        )
+        ImageDraw.Draw(text_img).text(
+            (padding - bbox[0], padding - bbox[1]),
+            text,
+            font=font,
+            fill=(70, 70, 70, 180),
+        )
+        return text_img.rotate(30, expand=True, resample=Image.BICUBIC)
+
     def _stamp_watermark(self, img: Image.Image) -> Image.Image:
         w, h = img.size
         font_size = max(28, int(min(w, h) * 0.055))
-        font = self._load_font(font_size)
-        logo = self._get_logo_rgba(max_width=max(140, int(min(w, h) * 0.26)), alpha_factor=0.32)
+        logo = self._get_logo_rgba(max_width=max(140, int(min(w, h) * 0.26)), alpha_factor=0.72)
 
-        # Measure text
-        tmp = Image.new("RGBA", (1, 1))
-        tmp_draw = ImageDraw.Draw(tmp)
-        bbox = tmp_draw.textbbox((0, 0), WATERMARK_TEXT, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-
-        # Draw logo + text on transparent canvas (logo above text)
+        rotated = self._get_rotated_text_rgba(WATERMARK_TEXT, font_size)
         pad = 24
         logo_h = logo.height if logo else 0
         logo_w = logo.width if logo else 0
         gap = max(8, int(font_size * 0.28)) if logo else 0
-        block_w = max(tw, logo_w) + pad * 2
-        block_h = th + logo_h + gap + pad * 2
-
-        txt_img = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
-        txt_draw = ImageDraw.Draw(txt_img)
-
+        block_w = max(rotated.width, logo_w) + pad * 2
+        block_h = rotated.height + logo_h + gap + pad * 2
+        watermark = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
         current_y = pad
         if logo:
-            logo_x = (block_w - logo_w) // 2
-            txt_img.paste(logo, (logo_x, current_y), logo)
+            watermark.paste(logo, ((block_w - logo_w) // 2, current_y), logo)
             current_y += logo_h + gap
-
-        text_x = (block_w - tw) // 2
-        txt_draw.text((text_x, current_y), WATERMARK_TEXT, font=font, fill=(80, 80, 80, 72))
-
-        # Rotate 45° diagonal
-        rotated = txt_img.rotate(45, expand=True, resample=Image.BICUBIC)
+        watermark.paste(
+            rotated,
+            ((block_w - rotated.width) // 2, current_y),
+            rotated,
+        )
 
         # Center on page
         overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        x = (w - rotated.width) // 2
-        y = (h - rotated.height) // 2
-        overlay.paste(rotated, (x, y), mask=rotated)
+        x = (w - watermark.width) // 2
+        y = (h - watermark.height) // 2
+        overlay.paste(watermark, (x, y), mask=watermark)
 
         result = Image.alpha_composite(img.convert("RGBA"), overlay)
         return result.convert("RGB")

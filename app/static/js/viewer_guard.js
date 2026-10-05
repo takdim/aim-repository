@@ -7,10 +7,22 @@
   }
 
   document.addEventListener('keydown', function (event) {
-    if (isPrintShortcut(event)) {
+    const key = String(event.key || '').toLowerCase();
+    const blockedShortcut = isPrintShortcut(event)
+      || ((event.ctrlKey || event.metaKey) && ['s', 'u'].includes(key))
+      || (event.key === 'PrintScreen');
+    if (blockedShortcut) {
       event.preventDefault();
       event.stopPropagation();
     }
+  }, true);
+
+  document.addEventListener('contextmenu', function (event) {
+    event.preventDefault();
+  }, true);
+
+  document.addEventListener('copy', function (event) {
+    event.preventDefault();
   }, true);
 
   const originalPrint = window.print;

@@ -10,12 +10,14 @@
 
 {# ── Top Bar ── #}
 <div class="viewer-topbar">
-  <a href="{% if eprint is defined %}{{ url_for('main.detail', eprint_id=eprint.eprint_id) }}{% else %}{{ url_for('main.index') }}{% endif %}"
+  <a href="{{ back_url if back_url is defined else (url_for('main.detail', eprint_id=eprint.eprint_id) if eprint is defined else url_for('main.index')) }}"
      class="viewer-back">
     ← Kembali
   </a>
   <div class="viewer-title-wrap">
-    {% if eprint is defined %}
+    {% if viewer_title is defined %}
+    <span class="viewer-doc-title">{{ viewer_title[:70] }}{% if viewer_title|length > 70 %}…{% endif %}</span>
+    {% elif eprint is defined %}
     <span class="viewer-doc-title">{{ eprint.title[:70] }}{% if eprint.title|length > 70 %}…{% endif %}</span>
     {% if doc is defined %}
     <span class="viewer-doc-type">{{ doc.label }}</span>
@@ -66,8 +68,9 @@
 
 <div
   id="viewerData"
-  data-eprint-id="{{ eprint.eprint_id }}"
-  data-doc-type="{{ doc.doc_type }}"
+  data-document-id="{{ viewer_document_id if viewer_document_id is defined else eprint.eprint_id }}"
+  data-doc-type="{{ viewer_doc_type if viewer_doc_type is defined else doc.doc_type }}"
+  data-page-url-prefix="{{ viewer_page_url_prefix }}"
   hidden
 ></div>
 
