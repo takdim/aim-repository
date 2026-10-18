@@ -29,6 +29,14 @@ def create_app() -> Flask:
     app_secret = os.environ.get("APP_SECRET_KEY", "").strip()
     app.secret_key = app_secret or secrets.token_urlsafe(48)
 
+    # Jika di belakang reverse proxy (nginx/Cloudflare), set TRUST_PROXY_HOPS=1 agar
+    # IP klien asli terbaca (dipakai rate limiter). Jangan aktifkan bila tanpa proxy.
+    proxy_hops = int(os.environ.get("TRUST_PROXY_HOPS", "0") or 0)
+    if proxy_hops > 0:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_hops, x_proto=proxy_hops, x_host=proxy_hops)
+
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",

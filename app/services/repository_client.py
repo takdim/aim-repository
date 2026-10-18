@@ -4,12 +4,23 @@ import requests
 from bs4 import BeautifulSoup
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import urlparse
 
 from .cache import metadata_cache
 
 BASE_URL = os.environ.get("REPOSITORY_BASE_URL", "https://repository.unhas.ac.id")
 RESULTS_PER_PAGE = int(os.environ.get("SEARCH_PER_PAGE", "20"))
 REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "20"))
+
+
+def is_allowed_repository_url(url: str) -> bool:
+    """Hanya izinkan HTTPS ke host repository yang dikonfigurasi (cegah SSRF)."""
+    try:
+        parsed = urlparse(url or "")
+        base_host = (urlparse(BASE_URL).hostname or "").lower()
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and bool(base_host) and (parsed.hostname or "").lower() == base_host
 
 HEADERS = {
     "User-Agent": (
@@ -442,6 +453,8 @@ class RepositoryClient:
                 continue
             full = href if href.startswith("http") else BASE_URL + href
             full = full.replace("http://", "https://")
+            if not is_allowed_repository_url(full):
+                continue
             if "/id/eprint/" in full:
                 return full       # prefer canonical URL
             candidates.append(full)

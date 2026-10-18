@@ -3,6 +3,7 @@ import os
 from html import escape
 from datetime import date
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import (
     Blueprint,
@@ -19,6 +20,7 @@ from .services.pdf_renderer import pdf_renderer
 from .services.cache import metadata_cache
 from .services.repository_client import repository_client
 from .services.rta_client import rta_client
+from .services.ratelimit import rate_limit
 
 main = Blueprint("main", __name__)
 
@@ -26,6 +28,7 @@ ITEMS_PER_PAGE = 20
 MIN_YEAR = 1976
 COMBINED_FETCH_LIMIT = int(os.environ.get("COMBINED_FETCH_LIMIT", "120"))
 SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "http://127.0.0.1:5001").rstrip("/")
+MAX_QUERY_LENGTH = 100
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -51,7 +54,7 @@ def _sanitize_query_input(text: str) -> str:
     clean = (text or "").strip()
     clean = re.sub(r"^#+\s*", "", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
-    return clean
+    return clean[:MAX_QUERY_LENGTH]
 
 
 def _short_abstract(text: str, max_len: int = 380) -> str:
@@ -184,6 +187,7 @@ def index():
 
 
 @main.route("/search")
+@rate_limit("search", 30)
 def search():
     q = _sanitize_query_input(request.args.get("q", ""))
     year_raw = request.args.get("year", "").strip()
@@ -226,22 +230,29 @@ def search():
     # Fetch bertahap: cukup ambil kelipatan kecil dari page size agar respons tetap cepat.
     fetch_limit = min(COMBINED_FETCH_LIMIT, max(ITEMS_PER_PAGE * 2, page * ITEMS_PER_PAGE + ITEMS_PER_PAGE))
 
-    repo_failed = False
-    rta_failed = False
+    def _fetch_repo():
+        if metadata_cache.get("repo:offline"):
+            return [], True
+        try:
+            return _collect_repository_items(q, year_filter, fetch_limit), False
+        except Exception:
+            metadata_cache.set("repo:offline", True, ttl=180)
+            return [], True
 
-    try:
-        repo_items = _collect_repository_items(q, year_filter, fetch_limit)
-    except Exception:
-        repo_failed = True
-        repo_items = []
+    def _fetch_rta():
+        try:
+            items = rta_client.search_approved(q, year_filter, fetch_limit)
+            for item in items:
+                item["abstract"] = _short_abstract(item.get("abstract", ""))
+            return items, False
+        except Exception:
+            return [], True
 
-    try:
-        rta_items = rta_client.search_approved(q, year_filter, fetch_limit)
-        for item in rta_items:
-            item["abstract"] = _short_abstract(item.get("abstract", ""))
-    except Exception:
-        rta_failed = True
-        rta_items = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        repo_future = pool.submit(_fetch_repo)
+        rta_future = pool.submit(_fetch_rta)
+        repo_items, repo_failed = repo_future.result()
+        rta_items, rta_failed = rta_future.result()
 
     if repo_failed and rta_failed:
         return render_template(
@@ -269,15 +280,16 @@ def search():
 
     pagination_pages = make_pagination_pages(pagination["current"], pagination["total_pages"])
 
-    metadata_cache.set(
-        result_cache_key,
-        {
-            "results": results,
-            "pagination": pagination,
-            "pagination_pages": pagination_pages,
-        },
-        ttl=180,
-    )
+    if not (repo_failed or rta_failed):
+        metadata_cache.set(
+            result_cache_key,
+            {
+                "results": results,
+                "pagination": pagination,
+                "pagination_pages": pagination_pages,
+            },
+            ttl=180,
+        )
 
     return render_template(
         "index.html",
@@ -291,6 +303,7 @@ def search():
 
 
 @main.route("/detail/<eprint_id>")
+@rate_limit("detail", 60)
 def detail(eprint_id: str):
     if not eprint_id.isdigit():
         abort(400)
@@ -334,6 +347,7 @@ def detail(eprint_id: str):
 
 
 @main.route("/detail-rta/<source_id>")
+@rate_limit("detail-rta", 30)
 def detail_rta(source_id: str):
     if not source_id.isdigit():
         abort(400)
@@ -365,6 +379,7 @@ def detail_rta(source_id: str):
 
 
 @main.route("/view/<eprint_id>/<doc_type>")
+@rate_limit("view", 60)
 def view_pdf(eprint_id: str, doc_type: str):
     if not eprint_id.isdigit():
         abort(400)
@@ -397,6 +412,7 @@ def view_pdf(eprint_id: str, doc_type: str):
 
 
 @main.route("/view/rta/<source_id>/<doc_kind>")
+@rate_limit("view-rta", 30)
 def view_rta_pdf(source_id: str, doc_kind: str):
     if not source_id.isdigit() or not re.match(r"^[a-z0-9_]+$", doc_kind):
         abort(400)
@@ -425,6 +441,7 @@ def view_rta_pdf(source_id: str, doc_kind: str):
 
 
 @main.route("/api/pdf-inline/<eprint_id>/<doc_type>")
+@rate_limit("pdf-inline", 20)
 def api_pdf_inline(eprint_id: str, doc_type: str):
     if not eprint_id.isdigit():
         abort(400)
@@ -463,6 +480,7 @@ def api_pdf_inline(eprint_id: str, doc_type: str):
 
 
 @main.route("/api/page-image/<eprint_id>/<doc_type>/<int:page_num>")
+@rate_limit("page-image", 180)
 def api_page_image(eprint_id: str, doc_type: str, page_num: int):
     """
     Return JPEG gambar satu halaman PDF dengan watermark.
@@ -512,6 +530,7 @@ def api_page_image(eprint_id: str, doc_type: str, page_num: int):
 
 
 @main.route("/api/rta/page-image/<source_id>/<doc_kind>/<int:page_num>")
+@rate_limit("rta-page-image", 120)
 def api_rta_page_image(source_id: str, doc_kind: str, page_num: int):
     if not source_id.isdigit() or not re.match(r"^[a-z0-9_]+$", doc_kind):
         abort(400)
@@ -556,14 +575,24 @@ def api_rta_page_image(source_id: str, doc_kind: str, page_num: int):
 
 
 @main.route("/api/rta/login-check", methods=["GET", "POST"])
+@rate_limit("rta-login-check", 3)
 def rta_login_check():
-    """Validasi kredensial login RTA dari .env (tanpa membocorkan nilai rahasia)."""
+    """Validasi kredensial login RTA dari .env (tanpa membocorkan nilai rahasia).
+
+    Nonaktif secara default (404). Aktifkan hanya saat setup dengan
+    ENABLE_RTA_LOGIN_CHECK=1 dan matikan lagi di produksi.
+    """
+    if os.environ.get("ENABLE_RTA_LOGIN_CHECK", "0") != "1":
+        abort(404)
+    if request.remote_addr not in {"127.0.0.1", "::1"} or request.headers.get("X-Forwarded-For"):
+        abort(404)
     result = rta_client.login_check()
     status_code = 200 if result.get("ok") else 400
     return jsonify(result), status_code
 
 
 @main.route("/api/rta/pdf-inline/<source_id>/<doc_kind>")
+@rate_limit("rta-pdf-inline", 20)
 def api_rta_pdf_inline(source_id: str, doc_kind: str):
     if not source_id.isdigit():
         abort(400)
@@ -614,6 +643,8 @@ def robots_txt():
             "User-agent: *\n"
             "Allow: /\n"
             "Disallow: /api/rta/\n"
+            "Disallow: /api/page-image/\n"
+            "Disallow: /view/\n"
             "Disallow: /search\n"
             f"Sitemap: {_absolute_url('/sitemap.xml')}\n"
         )

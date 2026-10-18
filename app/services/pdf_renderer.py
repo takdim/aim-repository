@@ -9,6 +9,9 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 from .cache import pdf_bytes_cache
+from .repository_client import is_allowed_repository_url
+
+MAX_PDF_BYTES = int(os.environ.get("MAX_PDF_BYTES", str(50 * 1024 * 1024)))
 
 WATERMARK_TEXT = "UNIVERSITAS HASANUDDIN"
 RENDER_SCALE = 1.5  # ~108 DPI rendering quality
@@ -124,9 +127,24 @@ class PDFRenderer:
             if cached:
                 return cached
 
-            resp = requests.get(file_url, headers=HEADERS, timeout=90, stream=True)
-            resp.raise_for_status()
-            pdf_bytes = b"".join(resp.iter_content(chunk_size=65536))
+            if not is_allowed_repository_url(file_url):
+                raise ValueError("URL PDF tidak diizinkan")
+
+            with requests.get(file_url, headers=HEADERS, timeout=90, stream=True) as resp:
+                resp.raise_for_status()
+                if not is_allowed_repository_url(resp.url):
+                    raise ValueError("Redirect ke host tidak diizinkan")
+                if int(resp.headers.get("Content-Length") or 0) > MAX_PDF_BYTES:
+                    raise ValueError("PDF terlalu besar")
+
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_content(chunk_size=65536):
+                    total += len(chunk)
+                    if total > MAX_PDF_BYTES:
+                        raise ValueError("PDF terlalu besar")
+                    chunks.append(chunk)
+            pdf_bytes = b"".join(chunks)
             pdf_bytes_cache.set(cache_key, pdf_bytes, ttl=300)  # 5 menit
             return pdf_bytes
 

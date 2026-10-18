@@ -1,11 +1,30 @@
+import json
 import os
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
-from .cache import metadata_cache
+from .cache import metadata_cache, pdf_bytes_cache
+
+RTA_ALLOWED_HOST = "regtugasakhir.unhas.ac.id"
+MAX_PDF_BYTES = int(os.environ.get("MAX_PDF_BYTES", str(50 * 1024 * 1024)))
+APPROVED_IDS_KEY = "rta:approved_ids"
+APPROVED_SCAN_MARKER = "rta:approved_scan_done"
+
+
+def _is_allowed_rta_url(url: str) -> bool:
+    """Hanya izinkan HTTPS ke host RTA resmi (cegah SSRF & kebocoran sesi login)."""
+    try:
+        parsed = urlparse(url or "")
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and (parsed.hostname or "").lower() == RTA_ALLOWED_HOST
 
 
 def _clean_text(value: str) -> str:
@@ -102,7 +121,21 @@ class RTAClient:
         self.timeout = int(os.environ.get("RTA_REQUEST_TIMEOUT_SECONDS", "20"))
         self.max_items = int(os.environ.get("RTA_MAX_ITEMS", "120"))
         self.max_scan_items = int(os.environ.get("RTA_MAX_SCAN_ITEMS", "280"))
+        # Pencarian judul tanpa filter tahun harus memindai lebih dalam agar data lama ikut terjangkau.
+        self.max_scan_items_no_year = int(os.environ.get("RTA_MAX_SCAN_ITEMS_NO_YEAR", "5000"))
         self.max_detail_scan_items = int(os.environ.get("RTA_MAX_DETAIL_SCAN_ITEMS", "60"))
+
+        # Indeks judul lokal: endpoint daftar RTA tidak menyertakan judul, jadi judul
+        # harus diambil dari halaman detail. Dilakukan sekali di background lalu disimpan ke disk.
+        self.index_max_rows = int(os.environ.get("RTA_INDEX_MAX_ROWS", "100000"))
+        self.index_workers = int(os.environ.get("RTA_INDEX_WORKERS", "6"))
+        self.index_refresh_seconds = int(os.environ.get("RTA_INDEX_REFRESH_SECONDS", str(24 * 3600)))
+        self.index_path = Path(__file__).resolve().parents[2] / "instance" / "rta_title_index.json"
+        self._index: dict[str, dict] = {}
+        self._index_complete_at = 0.0
+        self._index_lock = threading.Lock()
+        self._indexer_thread: threading.Thread | None = None
+        self._load_index()
 
         self.headers = {
             "User-Agent": (
@@ -116,6 +149,110 @@ class RTAClient:
 
     def is_configured(self) -> bool:
         return bool(self.login_url and self.email and self.password)
+
+    # ─── Indeks judul lokal ──────────────────────────────────────────────────
+
+    def _load_index(self) -> None:
+        try:
+            data = json.loads(self.index_path.read_text(encoding="utf-8"))
+            self._index = dict(data.get("items", {}))
+            self._index_complete_at = float(data.get("complete_at", 0) or 0)
+        except (OSError, ValueError):
+            self._index = {}
+            self._index_complete_at = 0.0
+
+    def _save_index(self) -> None:
+        try:
+            self.index_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._index_lock:
+                payload = {"complete_at": self._index_complete_at, "items": dict(self._index)}
+            tmp = self.index_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.index_path)
+        except OSError:
+            pass
+
+    def index_status(self) -> dict:
+        return {
+            "entries": len(self._index),
+            "complete_at": self._index_complete_at,
+            "running": bool(self._indexer_thread and self._indexer_thread.is_alive()),
+        }
+
+    def ensure_indexer(self) -> None:
+        """Jalankan crawler indeks di background jika belum ada/sudah kedaluwarsa."""
+        if not self.is_configured():
+            return
+        fresh = self._index_complete_at and (time.time() - self._index_complete_at) < self.index_refresh_seconds
+        if fresh:
+            return
+        with self._index_lock:
+            if self._indexer_thread and self._indexer_thread.is_alive():
+                return
+            self._indexer_thread = threading.Thread(target=self._run_indexer, name="rta-indexer", daemon=True)
+            self._indexer_thread.start()
+
+    def _run_indexer(self) -> None:
+        try:
+            with requests.Session() as session:
+                self._login(session)
+                rows = self._fetch_yajra_rows(session, "", "", self.index_max_rows)
+        except requests.RequestException:
+            return
+
+        pending = [r for r in rows if str(r.get("id", "")).strip() not in self._index]
+        local = threading.local()
+        failures = 0
+        done = 0
+
+        def work(row: dict) -> bool:
+            sess = getattr(local, "session", None)
+            if sess is None:
+                sess = requests.Session()
+                self._login(sess)
+                local.session = sess
+            row_id = str(row.get("id", "")).strip()
+            try:
+                item = self._row_to_item(sess, row, fetch_detail=True)
+            except requests.RequestException:
+                return False
+            with self._index_lock:
+                # Judul placeholder disimpan sebagai penanda kosong agar tidak diambil ulang.
+                self._index[row_id] = item or {"source_id": row_id, "title": ""}
+            return True
+
+        with ThreadPoolExecutor(max_workers=max(1, self.index_workers)) as pool:
+            for ok in pool.map(work, pending):
+                done += 1
+                if not ok:
+                    failures += 1
+                if done % 100 == 0:
+                    self._save_index()
+
+        if failures == 0:
+            self._index_complete_at = time.time()
+        self._save_index()
+
+    def _search_index(self, tokens: list[str], year_value: str, limit: int) -> list[dict]:
+        with self._index_lock:
+            entries = list(self._index.values())
+        matches: list[dict] = []
+        for item in entries:
+            title = item.get("title", "")
+            if not title:
+                continue
+            if year_value and str(item.get("year", "")) != year_value:
+                continue
+            haystack = _normalize_search_text(" ".join([
+                title,
+                item.get("abstract", ""),
+                item.get("author", ""),
+                item.get("item_type", ""),
+            ]))
+            if all(tok in haystack for tok in tokens):
+                matches.append(dict(item))
+        matches.sort(key=lambda i: str(i.get("year", "")), reverse=True)
+        return matches[:limit]
 
     def login_check(self) -> dict:
         if not self.is_configured():
@@ -145,19 +282,19 @@ class RTAClient:
                     return {
                         "ok": False,
                         "message": "Login RTA gagal. Cek email/password atau kebutuhan token tambahan.",
-                        "final_url": final_url,
                     }
 
                 return {
                     "ok": True,
                     "message": "Login RTA berhasil.",
-                    "final_url": final_url,
                 }
-        except requests.RequestException as exc:
+        except requests.RequestException:
             return {
                 "ok": False,
-                "message": f"Gagal koneksi ke RTA: {exc}",
+                "message": "Gagal koneksi ke RTA.",
             }
+
+    KNOWN_RTA_YEARS = [2026, 2025, 2024, 2023, 2022, 2021, 2020]
 
     def search_approved(self, query: str = "", year: int | None = None, limit: int | None = None) -> list[dict]:
         if not self.is_configured():
@@ -172,10 +309,54 @@ class RTAClient:
         if cached:
             return cached
 
+        # 1. Cek indeks judul lokal (instan < 1ms jika judul sudah terindeks)
+        if tokens:
+            index_matches = self._search_index(tokens, year_value, max_items)
+            if index_matches and (self._index_complete_at or len(index_matches) >= max_items or not year_value):
+                metadata_cache.set(cache_key, index_matches, ttl=300)
+                return index_matches
+
+        # 2. Jika tahun tidak dispesifikasi (year=None), RTA server secara default
+        # HANYA mengembalikan data tahun aktif (2026) dan mengabaikan 2020-2025.
+        # Oleh karena itu, lakukan pencarian lintas tahun RTA secara paralel.
+        if year is None and tokens:
+            items: list[dict] = list(self._search_index(tokens, "", max_items))
+            known_ids = {str(it.get("source_id", "")) for it in items}
+
+            def _search_year(y: int) -> list[dict]:
+                try:
+                    return self._search_approved_for_year(query_text, tokens, str(y), max_items)
+                except Exception:
+                    return []
+
+            with ThreadPoolExecutor(max_workers=min(len(self.KNOWN_RTA_YEARS), 6)) as pool:
+                for year_results in pool.map(_search_year, self.KNOWN_RTA_YEARS):
+                    for it in year_results:
+                        sid = str(it.get("source_id", ""))
+                        if sid not in known_ids:
+                            known_ids.add(sid)
+                            items.append(it)
+                            if len(items) >= max_items:
+                                break
+                    if len(items) >= max_items:
+                        break
+
+            self._save_index()
+            metadata_cache.set(cache_key, items, ttl=600)
+            return items
+
+        # 3. Pencarian untuk satu tahun tertentu (atau query tanpa token)
+        items = self._search_approved_for_year(query_text, tokens, year_value, max_items)
+        self._save_index()
+        metadata_cache.set(cache_key, items, ttl=600)
+        return items
+
+    def _search_approved_for_year(
+        self, query_text: str, tokens: list[str], year_value: str, max_items: int
+    ) -> list[dict]:
         try:
             with requests.Session() as session:
                 self._login(session)
-                # search_values di RTA cenderung untuk NIM/Nama, jadi query judul diproses lokal.
                 if tokens:
                     scan_limit = min(self.max_scan_items, max(max_items * 3, 120))
                     detail_limit = min(self.max_detail_scan_items, max(max_items, 30))
@@ -183,11 +364,16 @@ class RTAClient:
                     scan_limit = min(self.max_scan_items, max(max_items * 2, 80))
                     detail_limit = min(self.max_detail_scan_items, max(max_items // 2, 20))
 
-                rows = self._fetch_yajra_rows(session, "", year_value, scan_limit)
+                rows_cache_key = f"rta:rows:{year_value}:{scan_limit}"
+                rows = metadata_cache.get(rows_cache_key)
+                if rows is None:
+                    rows = self._fetch_yajra_rows(session, "", year_value, scan_limit)
+                    if tokens:
+                        metadata_cache.set(rows_cache_key, rows, ttl=600)
+
                 items: list[dict] = []
                 detail_candidates: list[dict] = []
 
-                # Tahap 1: filter cepat tanpa fetch detail, dari data row yajra langsung.
                 for row in rows:
                     title_raw = _clean_text(str(row.get("judul_id") or row.get("judul_en") or ""))
                     quick_text = _normalize_search_text(" ".join([
@@ -212,7 +398,6 @@ class RTAClient:
                     if len(items) >= max_items:
                         break
 
-                # Tahap 2: fetch detail terbatas untuk kandidat yang belum terdeteksi di tahap cepat.
                 if len(items) < max_items:
                     detail_count = 0
                     for row in detail_candidates:
@@ -225,14 +410,12 @@ class RTAClient:
                             continue
 
                         if tokens:
-                            haystack = _normalize_search_text(" ".join(
-                                [
-                                    row_item.get("title", ""),
-                                    row_item.get("abstract", ""),
-                                    row_item.get("author", ""),
-                                    row_item.get("item_type", ""),
-                                ]
-                            ))
+                            haystack = _normalize_search_text(" ".join([
+                                row_item.get("title", ""),
+                                row_item.get("abstract", ""),
+                                row_item.get("author", ""),
+                                row_item.get("item_type", ""),
+                            ]))
                             if not all(tok in haystack for tok in tokens):
                                 continue
 
@@ -240,7 +423,6 @@ class RTAClient:
                         if len(items) >= max_items:
                             break
 
-                metadata_cache.set(cache_key, items, ttl=600)
                 return items
         except requests.RequestException:
             return []
@@ -260,6 +442,9 @@ class RTAClient:
         try:
             with requests.Session() as session:
                 self._login(session)
+                # Hanya dokumen yang berstatus approved yang boleh ditampilkan (cegah enumerasi ID).
+                if not self._is_approved(session, source_id):
+                    return None
                 summary = self._fetch_detail_summary(session, detail_url)
                 title = _clean_text(summary.get("title", ""))
                 abstract = _clean_text(summary.get("abstract", ""))
@@ -324,26 +509,70 @@ class RTAClient:
             allow_redirects=True,
         )
 
+    def _remember_approved(self, rows: list[dict]) -> None:
+        ids = set(metadata_cache.get(APPROVED_IDS_KEY) or set())
+        for row in rows:
+            row_id = str(row.get("id", "")).strip()
+            if row_id.isdigit():
+                ids.add(row_id)
+        metadata_cache.set(APPROVED_IDS_KEY, ids, ttl=1800)
+
+    def _is_approved(self, session: requests.Session, source_id: str) -> bool:
+        ids = metadata_cache.get(APPROVED_IDS_KEY) or set()
+        if source_id in ids:
+            return True
+        # Hindari scan ulang ke RTA setiap kali ID asing diminta.
+        if metadata_cache.get(APPROVED_SCAN_MARKER):
+            return False
+        self._fetch_yajra_rows(session, "", "", self.max_scan_items)
+        metadata_cache.set(APPROVED_SCAN_MARKER, True, ttl=120)
+        ids = metadata_cache.get(APPROVED_IDS_KEY) or set()
+        return source_id in ids
+
     def fetch_attachment_pdf(self, file_url: str) -> bytes:
         if not self.is_configured():
             raise requests.RequestException("RTA client belum terkonfigurasi")
+        if not _is_allowed_rta_url(file_url):
+            raise requests.RequestException("URL lampiran tidak diizinkan")
+
+        cache_key = f"rta:pdf-src:{file_url}"
+        cached = pdf_bytes_cache.get(cache_key)
+        if cached:
+            return cached
 
         with requests.Session() as session:
             self._login(session)
-            resp = session.get(
+            with session.get(
                 file_url,
                 headers=self.headers,
                 timeout=self.timeout,
                 verify=self.verify_ssl,
                 allow_redirects=True,
-            )
-            resp.raise_for_status()
+                stream=True,
+            ) as resp:
+                resp.raise_for_status()
+                if not _is_allowed_rta_url(resp.url):
+                    raise requests.RequestException("Redirect ke host tidak diizinkan")
 
-            content_type = str(resp.headers.get("Content-Type", "")).lower()
-            if "application/pdf" not in content_type and not file_url.lower().endswith(".pdf"):
-                raise requests.RequestException("Lampiran RTA bukan PDF")
+                content_type = str(resp.headers.get("Content-Type", "")).lower()
+                if "application/pdf" not in content_type and not file_url.lower().endswith(".pdf"):
+                    raise requests.RequestException("Lampiran RTA bukan PDF")
 
-            return resp.content
+                declared = int(resp.headers.get("Content-Length") or 0)
+                if declared > MAX_PDF_BYTES:
+                    raise requests.RequestException("Lampiran terlalu besar")
+
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_content(chunk_size=65536):
+                    total += len(chunk)
+                    if total > MAX_PDF_BYTES:
+                        raise requests.RequestException("Lampiran terlalu besar")
+                    chunks.append(chunk)
+
+            data = b"".join(chunks)
+            pdf_bytes_cache.set(cache_key, data, ttl=300)
+            return data
 
     def _fetch_yajra_rows(
         self,
@@ -392,6 +621,7 @@ class RTAClient:
                 break
 
             rows.extend(data)
+            self._remember_approved(data)
             start += len(data)
             draw += 1
 
@@ -412,6 +642,9 @@ class RTAClient:
         elif row_id.isdigit():
             detail_url = f"https://regtugasakhir.unhas.ac.id/admin/dashboard/tugas_akhirs/detil/{row_id}"
 
+        if detail_url and not _is_allowed_rta_url(detail_url):
+            detail_url = ""
+
         title = _clean_text(str(row.get("judul_id") or row.get("judul_en") or ""))
         abstract = _clean_text(str(row.get("abstrak") or ""))
 
@@ -425,7 +658,7 @@ class RTAClient:
         if _looks_like_placeholder_title(title):
             return None
 
-        return {
+        item = {
             "source": "rta",
             "source_id": row_id,
             "source_url": detail_url,
@@ -436,6 +669,10 @@ class RTAClient:
             "item_type": _clean_text(str(row.get("show_prodi") or "")),
             "dedupe_key": _normalize_key(title),
         }
+        if title and not _looks_like_placeholder_title(title):
+            with self._index_lock:
+                self._index[row_id] = item
+        return item
 
     def _fetch_detail_summary(self, session: requests.Session, detail_url: str) -> dict:
         cache_key = f"rta:detil:v3:{detail_url}"
@@ -550,6 +787,8 @@ class RTAClient:
             url = href
             if not url.startswith("http"):
                 url = urljoin("https://regtugasakhir.unhas.ac.id", url)
+            if not _is_allowed_rta_url(url):
+                continue
 
             if url in seen_urls:
                 continue

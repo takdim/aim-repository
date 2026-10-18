@@ -36,3 +36,15 @@ downloaded_pdfs/
 # Env files (jika ada)
 .env
 *.env
+.env.*
+
+# Local data & database
+*.sqlite
+*.sqlite3
+*.db
+
+# AI agents & internal reports
+.agents/
+skills-lock.json
+security_best_practices_report.md
+
