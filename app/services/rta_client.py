@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 from .cache import metadata_cache, pdf_bytes_cache
 
-RTA_ALLOWED_HOST = "regtugasakhir.unhas.ac.id"
+RTA_ALLOWED_HOSTS = {"regtugasakhir.unhas.ac.id", "old.regtugasakhir.unhas.ac.id"}
 MAX_PDF_BYTES = int(os.environ.get("MAX_PDF_BYTES", str(50 * 1024 * 1024)))
 APPROVED_IDS_KEY = "rta:approved_ids"
 APPROVED_SCAN_MARKER = "rta:approved_scan_done"
@@ -24,7 +24,8 @@ def _is_allowed_rta_url(url: str) -> bool:
         parsed = urlparse(url or "")
     except ValueError:
         return False
-    return parsed.scheme == "https" and (parsed.hostname or "").lower() == RTA_ALLOWED_HOST
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and host in RTA_ALLOWED_HOSTS
 
 
 def _clean_text(value: str) -> str:
@@ -72,7 +73,7 @@ def _attachment_label_from_text(text: str) -> str:
         return "Bab 1-2"
     if "daftar pustaka" in t or "dapus" in t:
         return "Daftar Pustaka"
-    if "full text" in t or "fulltext" in t:
+    if "full text" in t or "fulltext" in t or "full teks" in t or "skripsi" in t or "tesis" in t or "disertasi" in t:
         return "Full Text"
     return "Dokumen"
 
@@ -442,15 +443,26 @@ class RTAClient:
         try:
             with requests.Session() as session:
                 self._login(session)
-                # Hanya dokumen yang berstatus approved yang boleh ditampilkan (cegah enumerasi ID).
-                if not self._is_approved(session, source_id):
-                    return None
                 summary = self._fetch_detail_summary(session, detail_url)
+                if not summary:
+                    return None
+
                 title = _clean_text(summary.get("title", ""))
                 abstract = _clean_text(summary.get("abstract", ""))
 
                 if _looks_like_placeholder_title(title):
                     return None
+
+                # Hanya dokumen yang berstatus approved yang boleh ditampilkan (cegah enumerasi ID).
+                is_known_approved = (
+                    (source_id in self._index and bool(self._index[source_id].get("title")))
+                    or self._is_in_approved_cache(source_id)
+                    or summary.get("is_approved", False)
+                )
+                if not is_known_approved:
+                    return None
+
+                self._remember_approved([{"id": source_id}])
 
                 result = {
                     "source": "rta",
@@ -517,17 +529,21 @@ class RTAClient:
                 ids.add(row_id)
         metadata_cache.set(APPROVED_IDS_KEY, ids, ttl=1800)
 
-    def _is_approved(self, session: requests.Session, source_id: str) -> bool:
-        ids = metadata_cache.get(APPROVED_IDS_KEY) or set()
-        if source_id in ids:
-            return True
-        # Hindari scan ulang ke RTA setiap kali ID asing diminta.
-        if metadata_cache.get(APPROVED_SCAN_MARKER):
-            return False
-        self._fetch_yajra_rows(session, "", "", self.max_scan_items)
-        metadata_cache.set(APPROVED_SCAN_MARKER, True, ttl=120)
+    def _is_in_approved_cache(self, source_id: str) -> bool:
         ids = metadata_cache.get(APPROVED_IDS_KEY) or set()
         return source_id in ids
+
+    def _is_approved(self, session: requests.Session, source_id: str) -> bool:
+        if source_id in self._index and bool(self._index[source_id].get("title")):
+            return True
+        if self._is_in_approved_cache(source_id):
+            return True
+        detail_url = f"https://regtugasakhir.unhas.ac.id/admin/dashboard/tugas_akhirs/detil/{source_id}"
+        summary = self._fetch_detail_summary(session, detail_url)
+        if summary and summary.get("is_approved"):
+            self._remember_approved([{"id": source_id}])
+            return True
+        return False
 
     def fetch_attachment_pdf(self, file_url: str) -> bytes:
         if not self.is_configured():
@@ -774,6 +790,12 @@ class RTAClient:
                     if m_year:
                         year = m_year.group(0)
 
+        is_approved = False
+        for el in soup.find_all(class_=lambda c: c and ("alert" in c or "badge" in c or "text-success" in c)):
+            if "disetujui" in el.get_text(" ", strip=True).lower():
+                is_approved = True
+                break
+
         documents: list[dict] = []
         seen_urls: set[str] = set()
 
@@ -781,7 +803,7 @@ class RTAClient:
             href = str(a.get("href", "")).strip()
             if not href:
                 continue
-            if not re.search(r"/attachments/\d+/show/.*\.pdf", href, re.I):
+            if not re.search(r"(\.pdf(\?.*)?$|/attachments/\d+/show/|/storage/dokumen/)", href, re.I):
                 continue
 
             url = href
@@ -793,7 +815,7 @@ class RTAClient:
             if url in seen_urls:
                 continue
 
-            context_parts: list[str] = [_clean_text(a.get_text(" ", strip=True))]
+            context_parts: list[str] = [_clean_text(a.get_text(" ", strip=True)), url.lower()]
             node = a
             for _ in range(6):
                 node = node.parent
@@ -838,6 +860,7 @@ class RTAClient:
             "author": author,
             "year": year,
             "item_type": item_type,
+            "is_approved": is_approved,
             "documents": documents,
         }
         metadata_cache.set(cache_key, data, ttl=1800)

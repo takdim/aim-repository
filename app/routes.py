@@ -124,11 +124,9 @@ def _collect_repository_items(q: str, year_filter: int | None, limit: int) -> li
             break
 
         for row in batch:
-            pdf_status = "unknown"
-            try:
-                pdf_status = repository_client.get_pdf_status(row.eprint_id)
-            except Exception:
-                pdf_status = "unknown"
+            # Gunakan status dari cache jika sudah pernah dimuat sebelumnya.
+            # Hindari HTTP request baru (N+1 detail) agar tidak membebani server repositori.
+            pdf_status = metadata_cache.get(f"pdf_status:{row.eprint_id}") or "unknown"
 
             items.append(
                 {
@@ -320,12 +318,7 @@ def detail(eprint_id: str):
             back_url=back_url,
         ), 500
 
-    open_doc = _find_open_doc_for_pdf(eprint)
     citation_pdf_url = ""
-    if open_doc is not None:
-        citation_pdf_url = _absolute_url(
-            url_for("main.api_pdf_inline", eprint_id=eprint.eprint_id, doc_type=open_doc.doc_type)
-        )
 
     citation_page_url = _absolute_url(url_for("main.detail", eprint_id=eprint.eprint_id))
     source_uri = f"https://repository.unhas.ac.id/id/eprint/{eprint.eprint_id}"
@@ -441,42 +434,15 @@ def view_rta_pdf(source_id: str, doc_kind: str):
 
 
 @main.route("/api/pdf-inline/<eprint_id>/<doc_type>")
-@rate_limit("pdf-inline", 20)
 def api_pdf_inline(eprint_id: str, doc_type: str):
-    if not eprint_id.isdigit():
-        abort(400)
-    if not re.match(r"^[a-z0-9_]+$", doc_type):
+    """Endpoint unduhan PDF utuh dinonaktifkan permanen demi mencegah penyedotan & plagiarisme file.
+    Permintaan via browser dialihkan ke viewer berproteksi, sedangkan unduhan langsung ditolak (404).
+    """
+    if not eprint_id.isdigit() or not re.match(r"^[a-z0-9_]+$", doc_type):
         abort(400)
     if request.accept_mimetypes.best_match(["text/html", "application/pdf"]) == "text/html":
         return redirect(url_for("main.view_pdf", eprint_id=eprint_id, doc_type=doc_type))
-
-    try:
-        eprint = repository_client.get_detail(eprint_id)
-    except Exception:
-        abort(503)
-
-    doc = next((d for d in eprint.documents if d.doc_type == doc_type), None)
-    if doc is None:
-        abort(404)
-    if doc.is_restricted:
-        abort(403)
-
-    try:
-        pdf_bytes = pdf_renderer.get_watermarked_pdf(eprint_id, doc_type, doc.file_url)
-    except Exception:
-        abort(500)
-
-    filename = f"eprint-{eprint_id}-{doc_type}.pdf"
-    return Response(
-        pdf_bytes,
-        mimetype="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "Cache-Control": "private, max-age=300",
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "SAMEORIGIN",
-        },
-    )
+    abort(404)
 
 
 @main.route("/api/page-image/<eprint_id>/<doc_type>/<int:page_num>")
@@ -592,48 +558,15 @@ def rta_login_check():
 
 
 @main.route("/api/rta/pdf-inline/<source_id>/<doc_kind>")
-@rate_limit("rta-pdf-inline", 20)
 def api_rta_pdf_inline(source_id: str, doc_kind: str):
-    if not source_id.isdigit():
-        abort(400)
-    if not re.match(r"^[a-z0-9_]+$", doc_kind):
+    """Endpoint unduhan PDF utuh RTA dinonaktifkan permanen demi mencegah penyedotan & plagiarisme file.
+    Permintaan via browser dialihkan ke viewer berproteksi, sedangkan unduhan langsung ditolak (404).
+    """
+    if not source_id.isdigit() or not re.match(r"^[a-z0-9_]+$", doc_kind):
         abort(400)
     if request.accept_mimetypes.best_match(["text/html", "application/pdf"]) == "text/html":
         return redirect(url_for("main.view_rta_pdf", source_id=source_id, doc_kind=doc_kind))
-
-    detail_data = rta_client.get_detail_by_id(source_id)
-    if not detail_data:
-        abort(503)
-
-    documents = detail_data.get("documents", [])
-    doc = next((d for d in documents if str(d.get("kind", "")) == doc_kind), None)
-    if doc is None:
-        abort(404)
-
-    file_url = str(doc.get("url", "")).strip()
-    if not file_url:
-        abort(404)
-
-    try:
-        src_pdf_bytes = rta_client.fetch_attachment_pdf(file_url)
-        pdf_bytes = pdf_renderer.get_watermarked_pdf_from_bytes(
-            f"rta:{source_id}:{doc_kind}",
-            src_pdf_bytes,
-        )
-    except Exception:
-        abort(500)
-
-    filename = f"rta-{source_id}-{doc_kind}.pdf"
-    return Response(
-        pdf_bytes,
-        mimetype="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "Cache-Control": "private, max-age=300",
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "SAMEORIGIN",
-        },
-    )
+    abort(404)
 
 
 @main.route("/robots.txt")
@@ -642,8 +575,7 @@ def robots_txt():
         content = (
             "User-agent: *\n"
             "Allow: /\n"
-            "Disallow: /api/rta/\n"
-            "Disallow: /api/page-image/\n"
+            "Disallow: /api/\n"
             "Disallow: /view/\n"
             "Disallow: /search\n"
             f"Sitemap: {_absolute_url('/sitemap.xml')}\n"

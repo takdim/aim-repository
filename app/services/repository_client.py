@@ -307,6 +307,16 @@ class RepositoryClient:
         detail = self._parse_detail(soup, eprint_id)
 
         metadata_cache.set(cache_key, detail, ttl=600)
+
+        # Otomatis isi cache pdf_status saat detail berhasil dimuat
+        if not detail.documents:
+            status = "unavailable"
+        elif any(not doc.is_restricted for doc in detail.documents):
+            status = "available"
+        else:
+            status = "restricted"
+        metadata_cache.set(f"pdf_status:{eprint_id}", status, ttl=600)
+
         return detail
 
     def get_pdf_status(self, eprint_id: str) -> str:
