@@ -47,4 +47,6 @@ downloaded_pdfs/
 .agents/
 skills-lock.json
 security_best_practices_report.md
+testing/
+*.pdf
 

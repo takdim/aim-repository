@@ -286,9 +286,9 @@ class RepositoryClient:
 
     # ─── Detail ──────────────────────────────────────────────────────────────
 
-    def get_detail(self, eprint_id: str) -> EprintDetail:
+    def get_detail(self, eprint_id: str) -> Optional[EprintDetail]:
         """
-        Ambil detail satu eprint. Return EprintDetail dengan list DocumentInfo.
+        Ambil detail satu eprint. Return EprintDetail dengan list DocumentInfo, atau None jika tidak ditemukan.
         Di-cache 10 menit. File URL TIDAK dikirim ke client — hanya ada di cache server.
         """
         cache_key = f"detail:{eprint_id}"
@@ -296,15 +296,29 @@ class RepositoryClient:
         if cached:
             return cached
 
-        resp = requests.get(
-            f"{BASE_URL}/id/eprint/{eprint_id}/",
-            headers=HEADERS,
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/id/eprint/{eprint_id}/",
+                headers=HEADERS,
+                timeout=REQUEST_TIMEOUT,
+            )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                return None
+            raise
 
         soup = BeautifulSoup(resp.text, "lxml")
         detail = self._parse_detail(soup, eprint_id)
+
+        # Cek jika halaman tidak berisi dokumen atau terindikasi 404/not found
+        if not detail.title and not detail.author and not detail.documents:
+            return None
+        title_lower = (detail.title or "").lower()
+        if "item not found" in title_lower or "tidak ditemukan" in title_lower:
+            return None
 
         metadata_cache.set(cache_key, detail, ttl=600)
 
@@ -333,6 +347,9 @@ class RepositoryClient:
             detail = self.get_detail(eprint_id)
         except Exception:
             return "unknown"
+
+        if not detail:
+            return "unavailable"
 
         if not detail.documents:
             status = "unavailable"

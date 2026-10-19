@@ -4,6 +4,7 @@ from html import escape
 from datetime import date
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
+import requests
 
 from flask import (
     Blueprint,
@@ -310,6 +311,13 @@ def detail(eprint_id: str):
 
     try:
         eprint = repository_client.get_detail(eprint_id)
+    except requests.exceptions.RequestException:
+        return render_template(
+            "detail.html",
+            error="Gagal menghubungi server repositori. Coba lagi beberapa saat.",
+            eprint_id=eprint_id,
+            back_url=back_url,
+        ), 502
     except Exception:
         return render_template(
             "detail.html",
@@ -317,6 +325,9 @@ def detail(eprint_id: str):
             eprint_id=eprint_id,
             back_url=back_url,
         ), 500
+
+    if not eprint:
+        abort(404)
 
     citation_pdf_url = ""
 
@@ -349,11 +360,7 @@ def detail_rta(source_id: str):
 
     detail_data = rta_client.get_detail_by_id(source_id)
     if not detail_data:
-        return render_template(
-            "rta_detail.html",
-            error="Gagal memuat detail RTA. Coba lagi.",
-            back_url=back_url,
-        ), 500
+        abort(404)
 
     citation_page_url = _absolute_url(url_for("main.detail_rta", source_id=source_id))
     return render_template(
@@ -379,11 +386,13 @@ def view_pdf(eprint_id: str, doc_type: str):
     if not re.match(r"^[a-z0-9_]+$", doc_type):
         abort(400)
 
-    # Server-side re-validasi (jangan percaya state dari client)
     try:
         eprint = repository_client.get_detail(eprint_id)
     except Exception:
         return render_template("viewer.html", load_error=True, eprint_id=eprint_id), 500
+
+    if not eprint:
+        abort(404)
 
     doc = next((d for d in eprint.documents if d.doc_type == doc_type), None)
     if doc is None:
@@ -412,7 +421,7 @@ def view_rta_pdf(source_id: str, doc_kind: str):
 
     detail_data = rta_client.get_detail_by_id(source_id)
     if not detail_data:
-        abort(503)
+        abort(404)
 
     doc = next(
         (item for item in detail_data.get("documents", [])
@@ -460,11 +469,13 @@ def api_page_image(eprint_id: str, doc_type: str, page_num: int):
     if page_num < 1:
         abort(400)
 
-    # Re-validasi server-side setiap request
     try:
         eprint = repository_client.get_detail(eprint_id)
     except Exception:
         abort(503)
+
+    if not eprint:
+        abort(404)
 
     doc = next((d for d in eprint.documents if d.doc_type == doc_type), None)
     if doc is None:
@@ -505,7 +516,7 @@ def api_rta_page_image(source_id: str, doc_kind: str, page_num: int):
 
     detail_data = rta_client.get_detail_by_id(source_id)
     if not detail_data:
-        abort(503)
+        abort(404)
 
     doc = next(
         (item for item in detail_data.get("documents", [])
@@ -640,3 +651,13 @@ def sitemap_xml():
     xml = "\n".join(xml_parts)
     metadata_cache.set(cache_key, xml, ttl=900)
     return Response(xml, mimetype="application/xml; charset=utf-8")
+
+
+@main.app_errorhandler(404)
+def handle_404(e):
+    return render_template("404.html"), 404
+
+
+@main.app_errorhandler(500)
+def handle_500(e):
+    return render_template("500.html"), 500

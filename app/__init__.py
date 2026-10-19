@@ -40,18 +40,21 @@ def create_app() -> Flask:
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
-        SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
+        SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "1") == "1",
+        PREFERRED_URL_SCHEME="https",
     )
 
     @app.after_request
     def set_security_headers(response: Response) -> Response:
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
-        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
-        response.headers.setdefault(
-            "Content-Security-Policy",
+        # Gunakan assignment langsung agar Flask menjadi single source of truth
+        # dan tidak menghasilkan header terduplikasi/konflik.
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
@@ -61,8 +64,10 @@ def create_app() -> Flask:
             "frame-ancestors 'self'; "
             "object-src 'none'; "
             "base-uri 'self'; "
-            "form-action 'self'",
+            "form-action 'self'"
         )
+        # Cegah pembocoran banner versi web server dari aplikasi
+        response.headers.pop("Server", None)
         return response
 
     from .routes import main

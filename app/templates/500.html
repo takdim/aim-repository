@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}500 - Terjadi Kesalahan Server — SIDORA{% endblock %}
+
+{% block body %}
+<header class="site-header">
+  <div class="header-inner">
+    <a href="{{ url_for('main.index') }}" class="site-logo">
+      <img src="{{ url_for('static', filename='img/logo_unhas.png') }}" alt="SIDORA Logo" class="header-logo-img" />
+      <span class="logo-text">SIDORA<strong></strong></span>
+    </a>
+  </div>
+</header>
+
+<main class="detail-main">
+  <div class="detail-container">
+    <div style="text-align: center; padding: 4rem 1.5rem; background: #ffffff; border-radius: 12px; box-shadow: var(--shadow-sm); border: 1px solid var(--gray-200); margin-top: 1rem;">
+      <div style="font-size: 4rem; font-weight: 800; color: var(--red); line-height: 1; margin-bottom: 0.75rem;">500</div>
+      <h1 style="font-size: 1.4rem; color: var(--gray-800); margin-bottom: 0.75rem;">Terjadi Kesalahan Server</h1>
+      <p style="color: var(--gray-600); max-width: 480px; margin: 0 auto 1.75rem; line-height: 1.6; font-size: 0.95rem;">
+        Sistem mengalami kendala teknis saat memproses permintaan Anda. Silakan coba kembali beberapa saat lagi.
+      </p>
+      <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;">
+        <a href="{{ url_for('main.index') }}" class="btn-read" style="text-decoration: none;">
+          ← Kembali ke Beranda
+        </a>
+      </div>
+    </div>
+  </div>
+</main>
+{% endblock %}
