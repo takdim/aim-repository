@@ -11,6 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .cache import metadata_cache, pdf_bytes_cache
+from .security_logger import log_auth_event, log_upstream_error
 
 RTA_ALLOWED_HOSTS = {"regtugasakhir.unhas.ac.id", "old.regtugasakhir.unhas.ac.id"}
 MAX_PDF_BYTES = int(os.environ.get("MAX_PDF_BYTES", str(50 * 1024 * 1024)))
@@ -257,6 +258,7 @@ class RTAClient:
 
     def login_check(self) -> dict:
         if not self.is_configured():
+            log_auth_event("RTA_LOGIN_CHECK", False, "Missing RTA configuration")
             return {
                 "ok": False,
                 "message": "Konfigurasi RTA belum lengkap (URL/email/password).",
@@ -280,16 +282,22 @@ class RTAClient:
                 still_on_login_path = bool(login_path) and final_path == login_path
 
                 if still_login_form or still_on_login_path:
+                    # ASVS 16.3.1: Log failed authentication attempts
+                    log_auth_event("RTA_LOGIN_CHECK", False, "Invalid credentials or session challenge")
                     return {
                         "ok": False,
                         "message": "Login RTA gagal. Cek email/password atau kebutuhan token tambahan.",
                     }
 
+                # ASVS 16.3.1: Log successful authentication
+                log_auth_event("RTA_LOGIN_CHECK", True, f"User {self.email}")
                 return {
                     "ok": True,
                     "message": "Login RTA berhasil.",
                 }
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            # ASVS 16.3.4: Log unexpected connection failures with external service
+            log_upstream_error("RTA", f"Connection error during login_check: {exc}")
             return {
                 "ok": False,
                 "message": "Gagal koneksi ke RTA.",

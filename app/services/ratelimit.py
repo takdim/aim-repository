@@ -5,6 +5,8 @@ from collections import defaultdict, deque
 
 from flask import Response, request
 
+from .security_logger import log_rate_limit
+
 _hits: dict[str, deque] = defaultdict(deque)
 _lock = threading.Lock()
 _last_purge = 0.0
@@ -24,13 +26,18 @@ def _purge(now: float) -> None:
 
 
 def rate_limit(name: str, limit: int, window: int = 60):
-    """Batasi request per IP (sliding window, in-memory). Respons 429 jika terlampaui."""
+    """Batasi request per IP (sliding window, in-memory). Respons 429 jika terlampaui.
+    
+    // ASVS 2.4.1: Anti-automation protection against rapid brute-force/scraping.
+    // ASVS 16.3.3: Log attempts to bypass anti-automation controls.
+    """
 
     def decorator(view):
         @functools.wraps(view)
         def wrapper(*args, **kwargs):
             now = time.monotonic()
-            key = f"{name}:{_client_ip()}"
+            client_ip = _client_ip()
+            key = f"{name}:{client_ip}"
             with _lock:
                 _purge(now)
                 dq = _hits[key]
@@ -38,6 +45,7 @@ def rate_limit(name: str, limit: int, window: int = 60):
                     dq.popleft()
                 if len(dq) >= limit:
                     retry_after = max(1, int(window - (now - dq[0])))
+                    log_rate_limit(client_ip, name, limit, window)
                     return Response(
                         "Terlalu banyak permintaan. Coba lagi nanti.",
                         status=429,

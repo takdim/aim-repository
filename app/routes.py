@@ -22,6 +22,7 @@ from .services.cache import metadata_cache
 from .services.repository_client import repository_client
 from .services.rta_client import rta_client
 from .services.ratelimit import rate_limit
+from .services.security_logger import log_security_violation
 
 main = Blueprint("main", __name__)
 
@@ -558,10 +559,14 @@ def rta_login_check():
 
     Nonaktif secara default (404). Aktifkan hanya saat setup dengan
     ENABLE_RTA_LOGIN_CHECK=1 dan matikan lagi di produksi.
+    // ASVS 15.2.3: Verify production environment does not expose extraneous debug/diagnostic functionality.
+    // ASVS 16.3.3: Log attempts to access restricted endpoints.
     """
     if os.environ.get("ENABLE_RTA_LOGIN_CHECK", "0") != "1":
+        log_security_violation("DISABLED_DIAGNOSTIC_ENDPOINT", request.remote_addr or "unknown", "/api/rta/login-check")
         abort(404)
     if request.remote_addr not in {"127.0.0.1", "::1"} or request.headers.get("X-Forwarded-For"):
+        log_security_violation("UNAUTHORIZED_DIAGNOSTIC_ACCESS", request.remote_addr or "unknown", "/api/rta/login-check")
         abort(404)
     result = rta_client.login_check()
     status_code = 200 if result.get("ok") else 400

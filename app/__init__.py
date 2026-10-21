@@ -26,8 +26,14 @@ def create_app() -> Flask:
     _load_dotenv_file()
 
     app = Flask(__name__)
+    # ASVS 13.3.1: Verify secret keys are adequately protected and have sufficient entropy.
     app_secret = os.environ.get("APP_SECRET_KEY", "").strip()
-    app.secret_key = app_secret or secrets.token_urlsafe(48)
+    if not app_secret or len(app_secret) < 32:
+        from .services.security_logger import logger as sec_logger
+        sec_logger.warning("APP_SECRET_KEY is unset or has insufficient entropy (<32 chars); using ephemeral random key.")
+        app.secret_key = secrets.token_urlsafe(48)
+    else:
+        app.secret_key = app_secret
 
     # Jika di belakang reverse proxy (nginx/Cloudflare), set TRUST_PROXY_HOPS=1 agar
     # IP klien asli terbaca (dipakai rate limiter). Jangan aktifkan bila tanpa proxy.
@@ -37,6 +43,7 @@ def create_app() -> Flask:
 
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_hops, x_proto=proxy_hops, x_host=proxy_hops)
 
+    # ASVS 3.4.1 & ASVS 14.3.1: Session cookie protection (HttpOnly, SameSite, Secure flag).
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
