@@ -13,6 +13,7 @@ let isLoading   = false;
 let eprintId    = '';
 let docType     = '';
 let pageUrlPrefix = '';
+let viewerToken = '';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const imgEl        = document.getElementById('pdfPageImg');
@@ -33,6 +34,12 @@ window.addEventListener('DOMContentLoaded', function () {
     eprintId = viewerData.getAttribute('data-document-id') || '';
     docType = viewerData.getAttribute('data-doc-type') || '';
     pageUrlPrefix = viewerData.getAttribute('data-page-url-prefix') || '/api/page-image';
+    viewerToken = viewerData.getAttribute('data-viewer-token') || '';
+    const initialPages = parseInt(viewerData.getAttribute('data-total-pages') || '0', 10);
+    if (initialPages > 0) {
+      totalPages = initialPages;
+      if (totalDisplay) totalDisplay.textContent = totalPages;
+    }
   }
 
   if (!imgEl) return;  // viewer tidak dirender (restricted/error)
@@ -57,19 +64,26 @@ function loadPage(page) {
   hideError();
   imgEl.style.display = 'none';
 
-  const url = `${pageUrlPrefix}/${eprintId}/${docType}/${page}`;
+  const baseUrl = `${pageUrlPrefix}/${eprintId}/${docType}/${page}`;
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  const fetchUrl = viewerToken ? `${baseUrl}${separator}token=${encodeURIComponent(viewerToken)}` : baseUrl;
 
-  fetch(url, { credentials: 'same-origin' })
+  fetch(fetchUrl, {
+    credentials: 'same-origin',
+    headers: {
+      'X-Viewer-Token': viewerToken,
+      'X-Requested-With': 'XMLHttpRequest'
+    }
+  })
     .then(function (resp) {
       if (!resp.ok) {
         throw new Error('HTTP ' + resp.status);
       }
 
-      // Baca total halaman dari header (tersedia sejak request pertama)
       const count = parseInt(resp.headers.get('X-Page-Count') || '0', 10);
       if (count > 0 && totalPages !== count) {
         totalPages = count;
-        totalDisplay.textContent = totalPages;
+        if (totalDisplay) totalDisplay.textContent = totalPages;
       }
 
       return resp.blob();

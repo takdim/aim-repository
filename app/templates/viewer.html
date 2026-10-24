@@ -71,6 +71,8 @@
   data-document-id="{{ viewer_document_id if viewer_document_id is defined else eprint.eprint_id }}"
   data-doc-type="{{ viewer_doc_type if viewer_doc_type is defined else doc.doc_type }}"
   data-page-url-prefix="{{ viewer_page_url_prefix }}"
+  data-total-pages="{{ viewer_total_pages if viewer_total_pages is defined else 0 }}"
+  data-viewer-token="{{ viewer_token if viewer_token is defined else '' }}"
   hidden
 ></div>
 

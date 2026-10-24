@@ -23,6 +23,7 @@ from .services.repository_client import repository_client
 from .services.rta_client import rta_client
 from .services.ratelimit import rate_limit
 from .services.security_logger import log_security_violation
+from .services.viewer_token import generate_viewer_token, verify_viewer_token
 
 main = Blueprint("main", __name__)
 
@@ -115,7 +116,8 @@ def _collect_repository_items(q: str, year_filter: int | None, limit: int) -> li
     page = 1
     total_pages = 1
 
-    while len(items) < limit and page <= total_pages:
+    # Batasi fetch bertahap maksimal 2 halaman repositori agar pencarian tidak stalling/timeout
+    while len(items) < limit and page <= min(total_pages, 2):
         if year_filter is not None:
             batch, pagination = repository_client.browse_by_year(year_filter, page, q)
         else:
@@ -251,8 +253,14 @@ def search():
     with ThreadPoolExecutor(max_workers=2) as pool:
         repo_future = pool.submit(_fetch_repo)
         rta_future = pool.submit(_fetch_rta)
-        repo_items, repo_failed = repo_future.result()
-        rta_items, rta_failed = rta_future.result()
+        try:
+            repo_items, repo_failed = repo_future.result(timeout=7.0)
+        except Exception:
+            repo_items, repo_failed = [], True
+        try:
+            rta_items, rta_failed = rta_future.result(timeout=7.0)
+        except Exception:
+            rta_items, rta_failed = [], True
 
     if repo_failed and rta_failed:
         return render_template(
@@ -403,6 +411,13 @@ def view_pdf(eprint_id: str, doc_type: str):
     if doc.is_restricted:
         return render_template("viewer.html", eprint=eprint, doc=doc, restricted=True)
 
+    client_ip = request.remote_addr or "unknown"
+    viewer_token = generate_viewer_token(eprint_id, doc_type, client_ip)
+    try:
+        total_pages = pdf_renderer.get_page_count(eprint_id, doc_type, doc.file_url)
+    except Exception:
+        total_pages = 0
+
     return render_template(
         "viewer.html",
         eprint=eprint,
@@ -411,6 +426,8 @@ def view_pdf(eprint_id: str, doc_type: str):
         viewer_document_id=eprint_id,
         viewer_doc_type=doc_type,
         viewer_page_url_prefix="/api/page-image",
+        viewer_total_pages=total_pages,
+        viewer_token=viewer_token,
     )
 
 
@@ -429,8 +446,17 @@ def view_rta_pdf(source_id: str, doc_kind: str):
          if str(item.get("kind", "")) == doc_kind),
         None,
     )
-    if doc is None or not str(doc.get("url", "")).strip():
+    file_url = str(doc.get("url", "")).strip() if doc else ""
+    if doc is None or not file_url:
         abort(404)
+
+    client_ip = request.remote_addr or "unknown"
+    viewer_token = generate_viewer_token(source_id, doc_kind, client_ip)
+    try:
+        src_pdf_bytes = rta_client.fetch_attachment_pdf(file_url)
+        total_pages = pdf_renderer.get_page_count_from_bytes(src_pdf_bytes)
+    except Exception:
+        total_pages = 0
 
     return render_template(
         "viewer.html",
@@ -440,6 +466,8 @@ def view_rta_pdf(source_id: str, doc_kind: str):
         viewer_document_id=source_id,
         viewer_doc_type=doc_kind,
         viewer_page_url_prefix="/api/rta/page-image",
+        viewer_total_pages=total_pages,
+        viewer_token=viewer_token,
     )
 
 
@@ -456,12 +484,13 @@ def api_pdf_inline(eprint_id: str, doc_type: str):
 
 
 @main.route("/api/page-image/<eprint_id>/<doc_type>/<int:page_num>")
-@rate_limit("page-image", 180)
+@rate_limit("page-image", 60, burst_limit=8, burst_window=4)
 def api_page_image(eprint_id: str, doc_type: str, page_num: int):
     """
     Return JPEG gambar satu halaman PDF dengan watermark.
+    Wajib memiliki token viewer bertanda tangan (HMAC) berumur pendek.
     URL file PDF asli TIDAK pernah dikirim ke client.
-    Header X-Page-Count menyertakan total halaman.
+    Header X-Page-Count tidak lagi diekspos untuk mencegah scraping otomatis.
     """
     if not eprint_id.isdigit():
         abort(400)
@@ -469,6 +498,18 @@ def api_page_image(eprint_id: str, doc_type: str, page_num: int):
         abort(400)
     if page_num < 1:
         abort(400)
+
+    # Verifikasi token viewer bertanda tangan (ASVS 3.5.1 / CWE-306)
+    token = request.headers.get("X-Viewer-Token") or request.args.get("token", "")
+    client_ip = request.remote_addr or "unknown"
+    if not verify_viewer_token(token, eprint_id, doc_type, client_ip):
+        log_security_violation("UNAUTHORIZED_PAGE_IMAGE_ACCESS", client_ip, f"doc={eprint_id}/{doc_type}")
+        abort(403)
+
+    sec_fetch_site = request.headers.get("Sec-Fetch-Site")
+    if sec_fetch_site and sec_fetch_site == "cross-site":
+        log_security_violation("CROSS_SITE_PAGE_IMAGE_ACCESS", client_ip, f"doc={eprint_id}/{doc_type}")
+        abort(403)
 
     try:
         eprint = repository_client.get_detail(eprint_id)
@@ -487,7 +528,6 @@ def api_page_image(eprint_id: str, doc_type: str, page_num: int):
     try:
         # Render halaman (0-based index)
         img_bytes = pdf_renderer.render_page(eprint_id, doc_type, page_num - 1, doc.file_url)
-        page_count = pdf_renderer.get_page_count(eprint_id, doc_type, doc.file_url)
     except ValueError:
         abort(404)
     except Exception:
@@ -497,23 +537,33 @@ def api_page_image(eprint_id: str, doc_type: str, page_num: int):
         img_bytes,
         mimetype="image/jpeg",
         headers={
-            "X-Page-Count": str(page_count),
             "Cache-Control": "no-store, no-cache, must-revalidate",
             "Pragma": "no-cache",
             "X-Content-Type-Options": "nosniff",
-            # Cegah embedding di frame lain
             "X-Frame-Options": "SAMEORIGIN",
         },
     )
 
 
 @main.route("/api/rta/page-image/<source_id>/<doc_kind>/<int:page_num>")
-@rate_limit("rta-page-image", 120)
+@rate_limit("rta-page-image", 60, burst_limit=8, burst_window=4)
 def api_rta_page_image(source_id: str, doc_kind: str, page_num: int):
     if not source_id.isdigit() or not re.match(r"^[a-z0-9_]+$", doc_kind):
         abort(400)
     if page_num < 1:
         abort(400)
+
+    # Verifikasi token viewer bertanda tangan (ASVS 3.5.1 / CWE-306)
+    token = request.headers.get("X-Viewer-Token") or request.args.get("token", "")
+    client_ip = request.remote_addr or "unknown"
+    if not verify_viewer_token(token, source_id, doc_kind, client_ip):
+        log_security_violation("UNAUTHORIZED_RTA_PAGE_IMAGE_ACCESS", client_ip, f"doc={source_id}/{doc_kind}")
+        abort(403)
+
+    sec_fetch_site = request.headers.get("Sec-Fetch-Site")
+    if sec_fetch_site and sec_fetch_site == "cross-site":
+        log_security_violation("CROSS_SITE_PAGE_IMAGE_ACCESS", client_ip, f"doc={source_id}/{doc_kind}")
+        abort(403)
 
     detail_data = rta_client.get_detail_by_id(source_id)
     if not detail_data:
@@ -533,7 +583,6 @@ def api_rta_page_image(source_id: str, doc_kind: str, page_num: int):
         img_bytes = pdf_renderer.render_page_from_bytes(
             f"rta:{source_id}:{doc_kind}", page_num - 1, src_pdf_bytes
         )
-        page_count = pdf_renderer.get_page_count_from_bytes(src_pdf_bytes)
     except ValueError:
         abort(404)
     except Exception:
@@ -543,7 +592,6 @@ def api_rta_page_image(source_id: str, doc_kind: str, page_num: int):
         img_bytes,
         mimetype="image/jpeg",
         headers={
-            "X-Page-Count": str(page_count),
             "Cache-Control": "no-store, no-cache, must-revalidate",
             "Pragma": "no-cache",
             "X-Content-Type-Options": "nosniff",

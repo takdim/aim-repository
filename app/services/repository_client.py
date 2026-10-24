@@ -10,7 +10,7 @@ from .cache import metadata_cache
 
 BASE_URL = os.environ.get("REPOSITORY_BASE_URL", "https://repository.unhas.ac.id")
 RESULTS_PER_PAGE = int(os.environ.get("SEARCH_PER_PAGE", "20"))
-REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "20"))
+REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10"))
 
 
 def is_allowed_repository_url(url: str) -> bool:
@@ -149,7 +149,7 @@ class RepositoryClient:
         resp = requests.get(
             f"{BASE_URL}/view/year/{year}.html",
             headers=HEADERS,
-            timeout=max(REQUEST_TIMEOUT, 25),
+            timeout=15,
         )
         resp.raise_for_status()
 
